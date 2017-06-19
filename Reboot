@@ -1,0 +1,2613 @@
+--STEP1
+--grab CPN based on HCPCS in svc remit record
+DROP TABLE IF EXISTS DN_Amgen_R_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST1 AS
+  SELECT claim_payment_number
+  FROM   RWD.service_payment_record sv
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON sv.adjudicated_procedure_cd = th.HCPCS;
+  
+  --select count(*) from DN_Amgen_R_ST1;
+  --11,059,902 records pertaining to Amgen and competitor therapies
+
+-- COMMAND ----------
+
+--STEP 2
+--connect CPN to CN ->only want the first CN record we find as this is just a way to get a line in on patient info
+--left join because we want to keep all claim PAYMENT records even if we can't find a claim for them
+DROP TABLE IF EXISTS DN_Amgen_R_ST2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST2 AS
+  SELECT CPN.claim_payment_number, linked_claim_id_1 AS Claim_number
+  FROM   DN_Amgen_R_ST1 CPN
+         LEFT JOIN RWD.era_linked_record lin
+                ON CPN.claim_payment_number = lin.claim_payment_number;
+
+--since this is a left join and we expect to see only one claim_number for a given claim_payment_number, 
+--we expect to see 11,059,902 records, and we do
+
+DROP TABLE IF EXISTS service_record_new;
+CREATE TABLE IF NOT EXISTS service_record_new as
+select claim_number,procedure_x, ndc, substr(ndc,1,9) as ndc_new
+from RWD.service_record;
+
+select * from service_record_new
+where NDC_NEW IS NOT NULL;
+
+-- COMMAND ----------
+
+--STEP 3
+--grab CN based on HCPCS and NDC in claim svc record
+DROP TABLE IF EXISTS DN_Amgen_C_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1 AS
+  SELECT claim_number
+  FROM   RWD.service_record sv
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON sv.procedure_x = th.HCPCS
+  UNION ALL
+  SELECT claim_number
+  FROM service_record_new sv
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  on sv.ndc_new = th.NDC;
+  
+  --select * from DN_Amgen_C_ST1;
+  --16,755,210 rows are the result of this
+  
+-- COMMAND ----------
+
+--STEP 4
+--connect CN to CPN -> need to get any and all connect to CPN we can find
+--inner join because we only care to keep CNs where we find CPNs
+DROP TABLE IF EXISTS DN_Amgen_C_ST2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST2 AS
+  SELECT DISTINCT Claim_payment_number,claim_number
+  FROM   (SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_1 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_2 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_3 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_4 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_5 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_6 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_7 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_8 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_9 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_10 = CN.claim_number); 
+
+--select * from DN_Amgen_C_ST2;
+--we get 2,903,848 rows here-this is because we are only keeping claim_numbers where we can find claim_payment_number
+
+-- COMMAND ----------
+
+--STEP 5
+--union step 2 + 4 w/ CPN and CN numbers
+DROP TABLE IF EXISTS DN_Amgen_RC_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST1 AS
+  SELECT Claim_payment_number,Claim_number
+  FROM   DN_Amgen_R_ST2
+  UNION
+  SELECT Claim_payment_number,Claim_number
+  FROM   DN_Amgen_C_ST2;
+
+--select * from DN_Amgen_RC_ST1;
+--we get 6,925,656 rows as a result here, indicating a significant amount of dupes taken out, this number makes sense(2.4 mill last time)
+
+-- COMMAND ----------
+
+--STEP 6** IMPORTANT TABLE ***
+--Now with all of the CN pull in patientsuffix+ zip if patientrelationship is null or that person/spouse from claim record
+DROP TABLE IF EXISTS DN_Amgen_RC_ST2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST2 AS
+  SELECT CN.Claim_payment_number
+         , CN.Claim_number
+         , CASE
+             WHEN patient_relation <> '19' THEN
+             Concat(patient_suffix, member_adr_zip)
+             ELSE Concat(patient_suffix, patient_dob)
+           END AS Patient_ID
+  FROM   DN_Amgen_RC_ST1 CN
+         LEFT JOIN RWD.claim_record clp
+                ON CN.claim_number = clp.claim_number; 
+
+--select * from DN_Amgen_RC_ST2;
+--we get 6,925,662 records which is what we expect
+
+-- COMMAND ----------
+
+--had to make this table to ensure that matching only on first 9 digist of NDC codes
+create table if not exists pharmacy_record_pNDC as
+select *,
+substr(PRODUCT_OR_SERVICE_ID,1,9) as pNDC
+from RWD.pharmacy_record;
+
+--STEP 7--
+--grab claim number, patient suffix 
+DROP TABLE IF EXISTS DN_Amgen_P_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_P_ST1 AS
+  SELECT 'NULL' AS claim_payment_number
+         ,emdeon_tdr_claimid_or_uow_agn AS claim_number
+         ,Concat(patient_suffix, patient_zip_or_postal_zone) AS Patient_ID
+  FROM pharmacy_record_pNDC ph
+  INNER JOIN Amgen_and_Competitor_therapies th
+ON ph.pNDC = th.NDC;
+  
+  select * from DN_Amgen_P_ST1;
+
+-- COMMAND ----------
+
+--STEP 8
+--union pharmacy claims w/ patient ID to medical claims w/ patient ID
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST1 AS
+  SELECT claim_payment_number,claim_number,Patient_ID,'Pharmacy' AS Type
+  FROM   DN_Amgen_P_ST1
+  UNION
+  SELECT claim_payment_number,claim_number,Patient_ID,'EMD_Med' AS Type
+  FROM   DN_Amgen_RC_ST2; 
+
+select * from DN_Amgen_EMD_ST1;
+--we have 15,346,339 records from both medical and pharmacy records
+
+-- COMMAND ----------
+
+--STEP 9 **** PHARMACY
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+
+--first create a distinct patient_ID table because it is going to be used 11 times later
+DROP TABLE IF EXISTS PATS;
+CREATE TABLE IF NOT EXISTS PATS AS 
+  SELECT DISTINCT Patient_ID 
+  FROM   DN_Amgen_EMD_ST1 
+  WHERE  patient_id NOT LIKE 'XXX %' ;
+  
+select * from PATS;
+--we have 1,099,166 unique patients
+ 
+ DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code) IN ( '174', '174.1', '174.2', '174.3',
+                                                     '174.4', '174.5', '174.6', '174.8',
+                                                     '174.9', 'C50.011', 'C50.012', 'C50.019',
+                                                     'C50.11', 'C50.111', 'C50.112', 'C50.119',
+                                                     'C50.211', 'C50.212', 'C50.219', 'C50.311',
+                                                     'C50.312', 'C50.319', 'C50.41', 'C50.411',
+                                                     'C50.412', 'C50.419', 'C50.511', 'C50.512',
+                                                     'C50.519', 'C50.61', 'C50.611', 'C50.612',
+                                                     'C50.619', 'C50.81', 'C50.811', 'C50.812',
+                                                     'C50.819', 'C50.91', 'C50.911', 'C50.912',
+                                                     'C50.919' ) 
+                                                     THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) IN ( '175', '175.9', 'C50.021', 'C50.022',
+                                                     'C50.029', 'C50.121', 'C50.122', 'C50.221',
+                                                     'C50.221', 'C50.42', 'C50.421', 'C50.421',
+                                                     'C50.422', 'C50.52', 'C50.521', 'C50.522',
+                                                     'C50.62', 'C50.621', 'C50.622', 'C50.82',
+                                                     'C50.821', 'C50.822', 'C50.92', 'C50.921',
+                                                     'C50.922', 'C50.929' ) 
+                                                     THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.01%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.02%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.11%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.12%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.21%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.22%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.31%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.32%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.41%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.42%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.51%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.52%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.61%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.62%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.81%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.82%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.91%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C50.92%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) IN ( '162', '162.2', '162.3', '162.4',
+                                                     '162.5', '162.8', '162.9', 'C33',
+                                                     'C34.00', 'C34.01', 'C34.02', 'C34.10',
+                                                     'C34.11', 'C34.12', 'C34.2', 'C34.30',
+                                                     'C34.31', 'C34.32', 'C34.80', 'C34.81',
+                                                     'C34.82', 'C34.90', 'C34.91', 'C34.92' ) 
+                                                     THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) IN ( '203', '203.01', '203.02', '203.0',
+                                                     'C90.0', 'C90.00', 'C90.01', 'C90.02' ) 
+                                                     THEN 'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code) IN ( '157', '157.1', '157.2', '157.3',
+                                                     '157.4', '157.8', '157.9', 'C25.0',
+                                                     'C25.1', 'C25.2', 'C25.3', 'C25.4',
+                                                     'C25.7', 'C25.8', 'C25.9' ) 
+                                                     THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.pharmacy_record
+                ON PATS.Patient_ID = Concat(patient_suffix, patient_zip_or_postal_zone);
+
+
+select * from DN_Amgen_EMD_ST2_DX;
+--1,107,321 rows
+
+-- COMMAND ----------
+
+--STEP 9 **** Medical primary diagnosis
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+ DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_primary;                                      
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_primary AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(primary_diagnosis) IN ( '174', '1741', '1742', '1743',
+                                                        '1744', '1745', '1746', '1748',
+                                                        '1749', 'C50011', 'C50012', 'C50019',
+                                                        'C5011', 'C50111', 'C50112', 'C50119',
+                                                        'C50211', 'C50212', 'C50219', 'C50311',
+                                                        'C50312', 'C50319', 'C5041', 'C50411',
+                                                        'C50412', 'C50419', 'C50511', 'C50512',
+                                                        'C50519', 'C5061', 'C50611', 'C50612',
+                                                        'C50619', 'C5081', 'C50811', 'C50812',
+                                                        'C50819', 'C5091', 'C50911', 'C50912',
+                                                        'C50919' ) THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) IN ( '175', '1759', 'C50021', 'C50022',
+                                                        'C50029', 'C50121', 'C50122', 'C50221',
+                                                        'C50221', 'C5042', 'C50421', 'C50421',
+                                                        'C50422', 'C5052', 'C50521', 'C50522',
+                                                        'C5062', 'C50621', 'C50622', 'C5082',
+                                                        'C50821', 'C50822', 'C5092', 'C50921',
+                                                        'C50922', 'C50929' ) THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) IN ( '162', '1622', '1623', '1624',
+                                                        '1625', '1628', '1629', 'C33',
+                                                        'C3400', 'C3401', 'C3402', 'C3410',
+                                                        'C3411', 'C3412', 'C342', 'C3430',
+                                                        'C3431', 'C3432', 'C3480', 'C3481',
+                                                        'C3482', 'C3490', 'C3491', 'C3492' ) 
+                                                        THEN 'Lung Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) IN ( '203', '20301', '20302', '2030',
+                                                        'C900', 'C9000', 'C9001', 'C9002' ) 
+                                                        THEN 'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(primary_diagnosis) IN ( '157', '1571', '1572', '1573',
+                                                        '1574', '1578', '1579', 'C250',
+                                                        'C251', 'C252', 'C253', 'C254',
+                                                        'C257', 'C258', 'C259' ) 
+                                                        THEN 'Pancreatic Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END ); 
+                                   
+select * from DN_Amgen_EMD_ST2_DX_Med_primary;
+--1,190,658 rows
+
+-- COMMAND ----------
+
+--STEP 9 **** Medical admit diagnosis
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_admit;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_admit AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(admit_diagnosis) IN ( '174', '1741', '1742', '1743',
+                                                      '1744', '1745', '1746', '1748',
+                                                      '1749', 'C50011', 'C50012', 'C50019',
+                                                      'C5011', 'C50111', 'C50112', 'C50119',
+                                                      'C50211', 'C50212', 'C50219', 'C50311',
+                                                      'C50312', 'C50319', 'C5041', 'C50411',
+                                                      'C50412', 'C50419', 'C50511', 'C50512',
+                                                      'C50519', 'C5061', 'C50611', 'C50612',
+                                                      'C50619', 'C5081', 'C50811', 'C50812',
+                                                      'C50819', 'C5091', 'C50911', 'C50912',
+                                                      'C50919'
+                                                    ) THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) IN ( '175', '1759', 'C50021', 'C50022',
+                                                      'C50029', 'C50121', 'C50122', 'C50221',
+                                                      'C50221', 'C5042', 'C50421', 'C50421',
+                                                      'C50422', 'C5052', 'C50521', 'C50522',
+                                                      'C5062', 'C50621', 'C50622', 'C5082',
+                                                      'C50821', 'C50822', 'C5092', 'C50921',
+                                                      'C50922', 'C50929' ) THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) IN ( '162', '1622', '1623', '1624',
+                                                      '1625', '1628', '1629', 'C33',
+                                                      'C3400', 'C3401', 'C3402', 'C3410',
+                                                      'C3411', 'C3412', 'C342', 'C3430',
+                                                      'C3431', 'C3432', 'C3480', 'C3481',
+                                                      'C3482', 'C3490', 'C3491', 'C3492' ) 
+						THEN 'Lung Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) IN ( '203', '20301', '20302', '2030',
+                                                      'C900', 'C9000', 'C9001', 'C9002' ) 
+							THEN 'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(admit_diagnosis) IN ( '157', '1571', '1572', '1573',
+                                                      '1574', '1578', '1579', 'C250',
+                                                      'C251', 'C252', 'C253', 'C254',
+                                                      'C257', 'C258', 'C259' ) 
+						THEN 'Pancreatic Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND admit_diagnosis IS NOT NULL
+                   AND PATS.patient_id = (CASE 
+                                           WHEN clp.patient_relation <> '19' THEN 
+                                           Concat(clp.patient_suffix, clp.member_adr_zip) 
+                                           ELSE Concat(clp.patient_suffix, clp.patient_dob) 
+                                          END);
+
+select * from DN_Amgen_EMD_ST2_DX_Med_admit;
+--produces 1,102,236 rows
+
+-- COMMAND ----------
+
+--STEP 9 **** Medical diagnosis_code_2
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx2 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN
+                      'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) THEN
+                      'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_2 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END ); 
+select * from DN_Amgen_EMD_ST2_DX_Med_dx2;
+--1,169,727 records
+--
+
+-- COMMAND ----------
+
+--STEP 9 **** Medical diagnosis_code_3
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx3;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx3 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) 
+                                                       THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_3 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+
+-- COMMAND ----------
+
+--STEP 9 **** Medical diagnosis_code_4
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx4;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx4 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN
+                      'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) THEN
+                      'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_4 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END ); 
+
+-- COMMAND ----------
+
+--STEP 9 **** Medical diagnosis_code_5
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx5;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx5 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN
+                      'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) THEN
+                      'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_5 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END ); 
+
+-- COMMAND ----------
+--STEP 9 **** Medical diagnosis_code_6
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx6;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx6 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN
+                      'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) THEN
+                      'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_6 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+
+
+-- COMMAND ----------
+--STEP 9 **** Medical diagnosis_code_7
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx7;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx7 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN
+                      'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) THEN
+                      'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_7 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END ); 
+                                           
+                                           
+                                           
+ -- COMMAND ----------
+--STEP 9 **** Medical diagnosis_code_8
+--based on step 8 patient_suffix look for patient DX in claim record and pharmacy record 
+--return unique table w/ patsuffix, DX flags for therapy areas (true/false columns)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_dx8;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_dx8 AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) IN ( '174', '1741', '1742', '1743',
+                                                       '1744', '1745', '1746', '1748',
+                                                       '1749', 'C50011', 'C50012', 'C50019',
+                                                       'C5011', 'C50111', 'C50112', 'C50119',
+                                                       'C50211', 'C50212', 'C50219', 'C50311',
+                                                       'C50312', 'C50319', 'C5041', 'C50411',
+                                                       'C50412', 'C50419', 'C50511', 'C50512',
+                                                       'C50519', 'C5061', 'C50611', 'C50612',
+                                                       'C50619', 'C5081', 'C50811', 'C50812',
+                                                       'C50819', 'C5091', 'C50911', 'C50912',
+                                                       'C50919'
+                                                     ) THEN
+                      'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) IN ( '175', '1759', 'C50021', 'C50022',
+                                                       'C50029', 'C50121', 'C50122', 'C50221',
+                                                       'C50221', 'C5042', 'C50421', 'C50421',
+                                                       'C50422', 'C5052', 'C50521', 'C50522',
+                                                       'C5062', 'C50621', 'C50622', 'C5082',
+                                                       'C50821', 'C50822', 'C5092', 'C50921',
+                                                       'C50922', 'C50929' ) THEN
+                      'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5001%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5002%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5011%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5012%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5021%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5022%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5031%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5032%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5041%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5042%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5051%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5052%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5061%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5062%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5081%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5082%' THEN 'Male Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5091%' THEN 'Female Breast Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C5092%' THEN 'Male Breast Cancer'
+                      ELSE 'NULL'
+                    END AS Breast_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) IN ( '162', '1622', '1623', '1624',
+                                                       '1625', '1628', '1629', 'C33',
+                                                       'C3400', 'C3401', 'C3402', 'C3410',
+                                                       'C3411', 'C3412', 'C342', 'C3430',
+                                                       'C3431', 'C3432', 'C3480', 'C3481',
+                                                       'C3482', 'C3490', 'C3491', 'C3492' ) THEN
+                      'Lung Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C34%' THEN 'Lung Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE '162%' THEN 'Lung Cancer'
+                      ELSE 'NULL'
+                    END AS Lung_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) IN ( '203', '20301', '20302', '2030',
+                                                       'C900', 'C9000', 'C9001', 'C9002' ) THEN
+                      'Multiple Myeloma'
+                      ELSE 'NULL'
+                    END AS Multiple_Myeloma
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) IN ( '157', '1571', '1572', '1573',
+                                                       '1574', '1578', '1579', 'C250',
+                                                       'C251', 'C252', 'C253', 'C254',
+                                                       'C257', 'C258', 'C259' ) THEN
+                      'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C25%' THEN 'Pancreatic Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE '157%' THEN 'Pancreatic Cancer'
+                      ELSE 'NULL'
+                    END AS Pancreatic_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_8 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END ); 
+            
+          select * from DN_Amgen_EMD_ST2_DX;
+select * from DN_Amgen_EMD_ST2_DX_Med_primary;
+select * from DN_Amgen_EMD_ST2_DX_Med_admit;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx2;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx3;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx4;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx5;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx6;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx7;
+select * from DN_Amgen_EMD_ST2_DX_Med_dx8;
+  
+                                           
+-- COMMAND ----------
+--STEP 9 NEW: need definitions for top types of cancer so client can filter through off-label/ other uses
+--other cancers for now: 
+/*
+1 bladder
+--ICD 9 188.*
+--ICD 10 C67.*
+2 colon 
+--ICD 9 153.*
+--ICD 10 C18.*
+3 rectal/ anal
+--ICD 9 154.*,
+--ICD 10 C20.*, C21.*
+4 endometrial
+--ICD 9 182
+--ICD 10 C54, C55
+5 kidney
+--ICD 9 189
+--ICD 10 C64
+6 leukemia
+--ICD 9: 204, 205, 206, 207, 208
+--ICD 10: C91, C92, C93, C94, C95
+7 melanoma
+--ICD 9: 172
+--ICD 10: C43
+8 non-hodgkin lymphoma????
+--ICD 9: 202
+--ICD 10 C85
+8 prostate
+--ICD 9: 185
+--ICD 10: C61
+9 thyroid
+--ICD 9: 193
+--ICD 10: C73
+*/
+-- COMMAND ----------
+--STEP 9 NEW: pharmacy diagnosis 
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_PH_extra;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_PH_extra AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.pharmacy_record
+                ON PATS.Patient_ID = Concat(patient_suffix, patient_zip_or_postal_zone);
+
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  primary_diagnosis
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_primary_diagnosis_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_primary_diagnosis_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(primary_diagnosis) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(primary_diagnosis) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(primary_diagnosis) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(primary_diagnosis) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(primary_diagnosis) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND primary_diagnosis IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+                                           
+-- COMMAND ----------     
+
+--STEP 9 ****** Medical  admit_diagnosis
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_admit_diagnosis_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_admit_diagnosis_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(admit_diagnosis) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(admit_diagnosis) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(admit_diagnosis) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(admit_diagnosis) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(admit_diagnosis) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND admit_diagnosis IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_2
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_2_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_2_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_2) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_2) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_2 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_3
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_3_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_3_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_3) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_3) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_3 IS NOT NULL
+                   AND PATS.patient_id = CASE
+                                           WHEN clp.patient_relation <> '19' THEN
+                                           Concat(clp.patient_suffix, clp.member_adr_zip)
+                                           ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                         END;
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_4
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_4_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_4_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_4) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_4) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_4 IS NOT NULL
+                   AND PATS.patient_id = CASE
+                                           WHEN clp.patient_relation <> '19' THEN
+                                           Concat(clp.patient_suffix, clp.member_adr_zip)
+                                           ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                         END;
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_5
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_5_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_5_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_5) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_5) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_5 IS NOT NULL
+                   AND PATS.patient_id = CASE
+                                           WHEN clp.patient_relation <> '19' THEN
+                                           Concat(clp.patient_suffix, clp.member_adr_zip)
+                                           ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                         END;
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_6
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_6_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_6_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_6) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_6) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_6 IS NOT NULL
+                   AND PATS.patient_id = CASE
+                                           WHEN clp.patient_relation <> '19' THEN
+                                           Concat(clp.patient_suffix, clp.member_adr_zip)
+                                           ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                         END;
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_7
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_7_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_7_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_7) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_7) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_7 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+
+-- COMMAND ----------
+--STEP 9 ****** Medical  diagnosis_code_8
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_8_new;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_8_new AS
+  SELECT DISTINCT PATS.Patient_ID
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '188%' THEN 'Bladder Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C67%' THEN 'Bladder Cancer'
+                      ELSE NULL
+                    END AS Bladder_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '153%' THEN 'Colon Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C18%' THEN 'Colon Cancer'
+                      ELSE NULL
+                    END AS Colon_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '154%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C20%' THEN 'Rectal Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C21%' THEN 'Rectal Cancer'
+                      ELSE NULL
+                    END AS Rectal_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '182%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C54%' THEN 'Endometrial Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C55%' THEN 'Endometrial Cancer'
+                      ELSE NULL
+                    END AS Endometrial_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '189%' THEN 'Kidney Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C64%' THEN 'Kidney Cancer'
+                      ELSE NULL
+                    END AS Kidney_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '204%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE '205%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE '206%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE '207%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE '208%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C91%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C92%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C93%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C94%' THEN 'Leukemia'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C95%' THEN 'Leukemia'
+                      ELSE NULL
+                    END AS Leukemia
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '172%' THEN 'Melanoma'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C43%' THEN 'Melanoma'
+                      ELSE NULL
+                    END AS Melanoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '202%' THEN 'Non-Hodgkin Lymphoma'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C85%' THEN 'Non-Hodgkin Lymphoma'
+                      ELSE NULL
+                    END AS NonHodgkin_Lymphoma
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '185%' THEN 'Prostate Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C61%' THEN 'Prostate Cancer'
+                      ELSE NULL
+                    END AS Prostate_Cancer
+                  , CASE
+                      WHEN Trim(diagnosis_code_8) LIKE '193%' THEN 'Thyroid Cancer'
+                      WHEN Trim(diagnosis_code_8) LIKE 'C73%' THEN 'Thyroid Cancer'
+                      ELSE NULL
+                    END AS Thyroid_Cancer
+  FROM   PATS
+         LEFT JOIN RWD.claim_record clp
+                ON clp.patient_suffix NOT LIKE 'XXX %'
+                   AND diagnosis_code_8 IS NOT NULL
+                   AND PATS.patient_id = ( CASE
+                                             WHEN clp.patient_relation <> '19' THEN
+                                             Concat(clp.patient_suffix, clp.member_adr_zip)
+                                             ELSE Concat(clp.patient_suffix, clp.patient_dob)
+                                           END );
+                                           
+-- COMMAND ----------
+--STEP 9B: union all the previous tables together
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST3_DX AS 
+  SELECT DISTINCT * 
+  FROM   (SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_primary 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_admit 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx2 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx3 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx4 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx5 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx6 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx7 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_dx8); 
+       
+          
+--STEP 9B: union all the new cancer dx tables together, theoretically could be combined with above
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST3_DX_new AS 
+  SELECT DISTINCT * 
+  FROM   (SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_PH_extra 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_primary_diagnosis_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_admit_diagnosis_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_2_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_3_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_4_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_5_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_6_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_7_new 
+          UNION ALL 
+          SELECT * 
+          FROM   DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_8_new);      
+
+
+
+--STEP 9C: create one table per dx LUNG CANCER
+--first chunk will pull patients that only don't have a history of lung cancer (no duplicates here presumable)
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_LUNG AS
+  SELECT lung1.patient_ID
+         , lung1.lung_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , Lung_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX
+          WHERE  Lung_Cancer IS NULL) lung1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX
+                    WHERE  Lung_Cancer IS NOT NULL) lung2
+                ON lung1.patient_id = lung2.patient_ID
+  WHERE  lung2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , Lung_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX
+  WHERE  Lung_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+
+--STEP 9C: create one table per dx BREAST CANCER
+--first chunk will pull patients that only don't have a history of lung cancer (no duplicates here presumable)
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_BREAST AS
+  SELECT dx1.patient_ID
+         , dx1.breast_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , Breast_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX
+          WHERE  Breast_Cancer IS NULL) dx1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX
+                    WHERE  Breast_Cancer IS NOT NULL) dx2
+                ON dx1.patient_id = dx2.patient_ID
+  WHERE  dx2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , Breast_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX
+  WHERE  Breast_Cancer IS NOT NULL;
+  
+select distinct(BREAST_CANCER) as BC, count(*) from DN_Amgen_EMD_ST4_DX_BREAST
+group by BC;
+-- COMMAND ----------
+
+--STEP 9C: create one table per dx multiple myeloma
+--first chunk will pull patients that only don't have a history of lung cancer (no duplicates here presumable)
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_MM AS
+  SELECT dx1.patient_ID
+         , dx1.multiple_myeloma
+  FROM   (SELECT DISTINCT patient_ID
+                          , multiple_myeloma
+          FROM   DN_Amgen_EMD_ST3_DX
+          WHERE  multiple_myeloma IS NULL) dx1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX
+                    WHERE  multiple_myeloma IS NOT NULL) dx2
+                ON dx1.patient_id = dx2.patient_ID
+  WHERE  dx2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , multiple_myeloma
+  FROM   DN_Amgen_EMD_ST3_DX
+  WHERE  multiple_myeloma IS NOT NULL;
+
+-- COMMAND ----------
+
+--STEP 9C: create one table per dx pancreatic cancer
+--first chunk will pull patients that only don't have a history of lung cancer (no duplicates here presumable)
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_Pancreatic AS
+  SELECT dx1.patient_ID
+         , dx1.pancreatic_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , pancreatic_cancer
+          FROM   DN_Amgen_EMD_ST3_DX
+          WHERE  pancreatic_cancer IS NULL) dx1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX
+                    WHERE  pancreatic_cancer IS NOT NULL) dx2
+                ON dx1.patient_id = dx2.patient_ID
+  WHERE  dx2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , pancreatic_cancer
+  FROM   DN_Amgen_EMD_ST3_DX
+  WHERE  pancreatic_cancer IS NOT NULL;
+
+-- COMMAND ----------
+
+--STEP 9C: create one table per dx bladder CANCER
+--first chunk will pull patients that only don't have a history of bladder cancer (no duplicates here presumable)
+--THIS IS SLIGHTLY DIFFERENT BECAUSE 'NULL' != NULL
+DROP TABLE IF EXISTS  DN_Amgen_EMD_ST4_DX_bladder;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_bladder AS
+  SELECT bladder1.patient_ID
+         , bladder1.bladder_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , Bladder_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  Bladder_Cancer IS NULL) bladder1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  Bladder_Cancer IS NOT NULL) bladder2
+                ON bladder1.patient_id = bladder2.patient_ID
+  WHERE  bladder2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , bladder_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE bladder_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+
+--STEP 9C: create one table per dx COLON CANCER
+--first chunk will pull patients that only don't have a history of COLON cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_COLON;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_COLON AS
+  SELECT COLON1.patient_ID
+         , COLON1.COLON_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , COLON_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  COLON_Cancer IS NULL) COLON1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  COLON_Cancer IS NOT NULL) COLON2
+                ON COLON1.patient_id = COLON2.patient_ID
+  WHERE  COLON2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , COLON_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  COLON_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+
+--STEP 9C: create one table per dx RECTAL CANCER
+--first chunk will pull patients that only don't have a history of RECTAL cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_RECTAL;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_RECTAL AS
+  SELECT RECTAL1.patient_ID
+         , RECTAL1.RECTAL_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , RECTAL_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  RECTAL_Cancer IS NULL) RECTAL1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  RECTAL_Cancer IS NOT NULL) RECTAL2
+                ON RECTAL1.patient_id = RECTAL2.patient_ID
+  WHERE  RECTAL2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , RECTAL_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  RECTAL_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx ENDOMETRIAL CANCER
+--first chunk will pull patients that only don't have a history of ENDOMETRIAL cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_ENDOMETRIAL;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_ENDOMETRIAL AS
+  SELECT ENDOMETRIAL1.patient_ID
+         , ENDOMETRIAL1.ENDOMETRIAL_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , ENDOMETRIAL_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  ENDOMETRIAL_Cancer IS NULL) ENDOMETRIAL1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  ENDOMETRIAL_Cancer IS NOT NULL) ENDOMETRIAL2
+                ON ENDOMETRIAL1.patient_id = ENDOMETRIAL2.patient_ID
+  WHERE  ENDOMETRIAL2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , ENDOMETRIAL_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  ENDOMETRIAL_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx KIDNEY CANCER
+--first chunk will pull patients that only don't have a history of KIDNEY cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_KIDNEY;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_KIDNEY AS
+  SELECT KIDNEY1.patient_ID
+         , KIDNEY1.KIDNEY_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , KIDNEY_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  KIDNEY_Cancer IS NULL) KIDNEY1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  KIDNEY_Cancer IS NOT NULL) KIDNEY2
+                ON KIDNEY1.patient_id = KIDNEY2.patient_ID
+  WHERE  KIDNEY2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , KIDNEY_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  KIDNEY_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx Leukemia
+--first chunk will pull patients that only don't have a history of Leukemia cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_Leukemia;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_Leukemia AS
+  SELECT Leukemia1.patient_ID
+         , Leukemia1.Leukemia
+  FROM   (SELECT DISTINCT patient_ID
+                          , Leukemia
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  Leukemia IS NULL) Leukemia1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  Leukemia IS NOT NULL) Leukemia2
+                ON Leukemia1.patient_id = Leukemia2.patient_ID
+  WHERE  Leukemia2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , Leukemia
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  Leukemia IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx MELANOMA
+--first chunk will pull patients that only don't have a history of MELANOMA cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_MELANOMA;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_MELANOMA AS
+  SELECT MELANOMA1.patient_ID
+         , MELANOMA1.MELANOMA
+  FROM   (SELECT DISTINCT patient_ID
+                          , MELANOMA
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  MELANOMA IS NULL) MELANOMA1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  MELANOMA IS NOT NULL) MELANOMA2
+                ON MELANOMA1.patient_id = MELANOMA2.patient_ID
+  WHERE  MELANOMA2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , MELANOMA
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  MELANOMA IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx NonHodgkin_Lymphoma
+--first chunk will pull patients that only don't have a history of NonHodgkin_Lymphoma cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_NonHodgkin_Lymphoma;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_NonHodgkin_Lymphoma AS
+  SELECT NonHodgkin_Lymphoma1.patient_ID
+         , NonHodgkin_Lymphoma1.NonHodgkin_Lymphoma
+  FROM   (SELECT DISTINCT patient_ID
+                          , NonHodgkin_Lymphoma
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  NonHodgkin_Lymphoma IS NULL) NonHodgkin_Lymphoma1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  NonHodgkin_Lymphoma IS NOT NULL) NonHodgkin_Lymphoma2
+                ON NonHodgkin_Lymphoma1.patient_id = NonHodgkin_Lymphoma2.patient_ID
+  WHERE  NonHodgkin_Lymphoma2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , NonHodgkin_Lymphoma
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  NonHodgkin_Lymphoma IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx PROSTATE CANCER
+--first chunk will pull patients that only don't have a history of PROSTATE cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_PROSTATE;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_PROSTATE AS
+  SELECT PROSTATE1.patient_ID
+         , PROSTATE1.PROSTATE_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , PROSTATE_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  PROSTATE_Cancer IS NULL) PROSTATE1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  PROSTATE_Cancer IS NOT NULL) PROSTATE2
+                ON PROSTATE1.patient_id = PROSTATE2.patient_ID
+  WHERE  PROSTATE2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , PROSTATE_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  PROSTATE_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+--STEP 9C: create one table per dx THYROID CANCER
+--first chunk will pull patients that only don't have a history of THYROID cancer (no duplicates here presumable)
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_THYROID;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_THYROID AS
+  SELECT THYROID1.patient_ID
+         , THYROID1.THYROID_cancer
+  FROM   (SELECT DISTINCT patient_ID
+                          , THYROID_Cancer
+          FROM   DN_Amgen_EMD_ST3_DX_new
+          WHERE  THYROID_Cancer IS NULL) THYROID1
+         LEFT JOIN (SELECT DISTINCT patient_ID
+                    FROM   DN_Amgen_EMD_ST3_DX_new
+                    WHERE  THYROID_Cancer IS NOT NULL) THYROID2
+                ON THYROID1.patient_id = THYROID2.patient_ID
+  WHERE  THYROID2.patient_ID IS NULL
+  --second chunk will pull out all the positive patients
+  UNION
+  SELECT DISTINCT patient_ID
+                  , THYROID_Cancer
+  FROM   DN_Amgen_EMD_ST3_DX_new
+  WHERE  THYROID_Cancer IS NOT NULL;
+
+-- COMMAND ----------
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST1 -> the og table
+--411,501
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST1 where patient_ID not like 'XXX %' og table w/out bad pat suffix
+--411,370
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST3_DX
+--411,370
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST4_DX_Pancreatic
+--411,370
+--select count(patient_ID) from DN_Amgen_EMD_ST4_DX_Pancreatic
+--411370
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST4_DX_Breast
+--411,370
+--select count( patient_ID) from DN_Amgen_EMD_ST4_DX_Breast
+--411686
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST4_DX_Lung
+--411,370
+--select count(distinct patient_ID) from DN_Amgen_EMD_ST4_DX_MM
+--411,370
+
+
+
+--this is the diagnosis table for only old diagnoses
+-- COMMAND ----------
+--would be nice to get patient dx into a single table- thinking a full outer join might do it
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_joined AS
+  SELECT panc.patient_id
+         , pancreatic_cancer
+         , breast_cancer
+         , lung_cancer
+         , multiple_myeloma
+  FROM   DN_Amgen_EMD_ST4_DX_Pancreatic panc
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Breast brea
+                      ON panc.patient_id = brea.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Lung lung
+                      ON panc.patient_id = lung.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_MM mm
+                      ON panc.patient_id = mm.patient_id;
+
+--this is the diganosis table for both old and new diagnoses
+-- COMMAND ----------
+--would be nice to get patient dx into a single table- thinking a full outer join might do it
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_joined_new;
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_joined_new AS
+  SELECT panc.patient_id
+         , pancreatic_cancer
+         , breast_cancer
+         , lung_cancer
+         , multiple_myeloma
+         -- new dx options
+         , bladder_cancer
+         , colon_cancer
+         , rectal_cancer
+         , endometrial_cancer
+         , kidney_cancer
+         , leukemia
+         , melanoma
+         , Nonhodgkin_lymphoma
+         , prostate_cancer
+         , thyroid_cancer
+  FROM   DN_Amgen_EMD_ST4_DX_Pancreatic panc
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Breast brea
+                      ON panc.patient_id = brea.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Lung lung
+                      ON panc.patient_id = lung.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_MM mm
+                      ON panc.patient_id = mm.patient_id
+         --new dx options
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Bladder blad
+                      ON panc.patient_id = blad.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Colon colo
+                      ON panc.patient_id = colo.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Rectal rect
+                      ON panc.patient_id = rect.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Endometrial endo
+                      ON panc.patient_id = endo.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_Kidney kidn
+                      ON panc.patient_id = kidn.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_leukemia leuk
+                      ON panc.patient_id = leuk.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_melanoma mela
+                      ON panc.patient_id = mela.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_NonHodgkin_Lymphoma ndgl
+                      ON panc.patient_id = ndgl.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_prostate pros
+                      ON panc.patient_id = pros.patient_id
+         FULL OUTER JOIN DN_Amgen_EMD_ST4_DX_thyroid thyr
+                      ON panc.patient_id = thyr.patient_id;
+
+-- COMMAND ----------
+--select count(*) from DN_Amgen_EMD_ST4_DX_joined
+--411,686
+SELECT Count(*)
+FROM   DN_Amgen_EMD_ST4_DX_joined_new;
+--411686
+-- COMMAND ----------
+
+
+
+--adding a column to the dx table that should be greater than 1 if we found any DX
+DROP TABLE IF EXISTS DN_Amgen_EMD_ST4_DX_joined_new_counter;
+CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST4_DX_joined_new_counter AS
+  SELECT *
+         , ( CASE WHEN pancreatic_cancer IS NULL THEN 0 ELSE 1 END +
+             CASE WHEN breast_cancer IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN lung_cancer IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN multiple_myeloma IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN bladder_cancer IS NULL THEN 0 ELSE 1 END +
+             CASE WHEN colon_cancer IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN rectal_cancer IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN endometrial_cancer IS NULL THEN 0 ELSE 1 END +
+             CASE WHEN kidney_cancer IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN leukemia IS NULL THEN 0 ELSE 1 END +
+             CASE WHEN melanoma IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN Nonhodgkin_lymphoma IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN prostate_cancer IS NULL THEN 0 ELSE 1 END + 
+             CASE WHEN thyroid_cancer IS NULL THEN 0 ELSE 1 END ) AS COUNTER
+  /*
+  ,pancreatic_cancer, breast_cancer,lung_cancer, multiple_myeloma
+  -- new dx options
+  ,bladder_cancer, , , 
+  ,, , , 
+  ,, 
+  */
+  FROM DN_Amgen_EMD_ST4_DX_JOINED_NEW;
+  
+ select distinct (counter) from DN_Amgen_EMD_ST4_DX_joined_new_counter;
+  
+-- COMMAND ----------
+SELECT * 
+FROM DN_Amgen_EMD_ST4_DX_JOINED_NEW 
+WHERE PANCREATIC_CANCER = 'NULL' AND BREAST_CANCER = 'NULL' AND LUNG_CANCER = 'NULL' AND MULTIPLE_MYELOMA = 'NULL' --315,910
+AND
+-- new dx options
+BLADDER_CANCER IS NULL --312,102
+AND COLON_CANCER IS NULL --312,102
+AND RECTAL_CANCER IS NULL --300,705
+AND ENDOMETRIAL_CANCER IS NULL --296,811
+AND KIDNEY_CANCER IS NULL -- 295,280
+AND LEUKEMIA IS NULL --293,111
+AND MELANOMA IS NULL --291,786
+AND NONHODGKIN_LYMPHOMA IS NULL --285671
+AND PROSTATE_CANCER IS NULL --281308
+AND THYROID_CANCER IS NULL --280969
+;
+
+-- COMMAND ----------
+
+SELECT * FROM DN_Amgen_EMD_ST4_DX_JOINED_NEW WHERE BLADDER_CANCER IS NOT NULL;
+
+-- COMMAND ----------
+
+--11. Pull in relevant payment info 
+--from Medical claims
+--GO TO HTTPS://DRG.CLOUD.DATABRICKS.COM/#NOTEBOOK/42952
+
+-- COMMAND ----------
+
+--STEP 3: needed to repeat to get the therapy associated w/ the claim_number in case we have claims that only exist because of ndc code
+--grab CN based on HCPCS and NDC in claim svc record
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1_therapy AS
+  SELECT claim_number,SV.ndc, procedure_x
+  FROM   RWD.service_record SV
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON SV.procedure_x = th.HCPCS;
+  UNION ALL
+  SELECT claim_number,svn.ndc,svn.procedure_x
+  FROM   service_record_new svn
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  on svn.ndc_new = th.NDC;
+  
+  describe table service_record_new;
+
+-- COMMAND ----------
+
+SELECT DISTINCT procedure_x,Substr(ndc, 1, 9)
+FROM   DN_Amgen_C_ST1_therapy;
+
+-- COMMAND ----------
+
+--do we have claim_payment_number w/out claim_number if so- those must be based on correct proc code
+SELECT Count(*)
+FROM   DN_Amgen_RC_ST1;
+--where claim_number IS NULL
+
+
+--FINAL QC below
+
+select * from DN_Amgen_EMD_ST2_DX;
+--1,126,314
+select * from DN_Amgen_EMD_ST2_DX_Med_primary;
+--1,211,752
+select * from DN_Amgen_EMD_ST2_DX_Med_admit;
+--1,121,312
+select * from DN_Amgen_EMD_ST2_DX_Med_dx2;
+--1,190,361
+select * from DN_Amgen_EMD_ST2_DX_Med_dx3;
+--1,164,740
+select * from DN_Amgen_EMD_ST2_DX_Med_dx4;
+--1,147,391
+select * from DN_Amgen_EMD_ST2_DX_Med_dx5;
+--1,132,603
+select * from DN_Amgen_EMD_ST2_DX_Med_dx6;
+--1,127,437
+select * from DN_Amgen_EMD_ST2_DX_Med_dx7;
+--1,124,598
+select * from DN_Amgen_EMD_ST2_DX_Med_dx8;
+--1,122,582
+
+select * from DN_Amgen_EMD_ST2_DX_PH_extra;
+--1,126,217
+select * from DN_Amgen_EMD_ST2_DX_Med_primary_diagnosis_new;
+--1,210,811
+select * from DN_Amgen_EMD_ST2_DX_Med_admit_diagnosis_new;
+--1,122,483
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_2_new;
+--1,186,766
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_3_new;
+--1,163,375
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_4_new;
+--1,147,497
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_5_new;
+--1,132,642
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_6_new;
+--1,127,622
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_7_new;
+--1,124,980
+select * from DN_Amgen_EMD_ST2_DX_Med_diagnosis_code_8_new;
+--1,122,681
+
+
+select * from DN_Amgen_EMD_ST3_DX;
+--1,236,023
+--old diagnosis codes
+select * from DN_Amgen_EMD_ST3_DX_new;
+--1,240,427
+--new diagnosis codes
+
+
+--old diagnosis records
+select * from DN_Amgen_EMD_ST4_DX_lung;
+--1,150,101
+select * from DN_Amgen_EMD_ST4_DX_breast;
+--1,117,939
+select * from DN_Amgen_EMD_ST4_DX_MM;
+--1,138,307
+select * from DN_Amgen_EMD_ST4_DX_pancreatic;
+--1,124,147
+
+select distinct(lung_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_lung
+group by BC;
+--31,944 patients with lung cancer
+select distinct(breast_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_breast
+group by BC;
+--59,030 patients with female breast cancer, 752 men with male breast cancer
+select distinct(Multiple_Myeloma) as BC, count(*) from DN_Amgen_EMD_ST4_DX_MM
+group by BC;
+--20,150 patients with Multiple Myeloma
+select distinct(Pancreatic_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_pancreatic
+group by BC;
+--5,990 patients with Pancreatic Cancer
+
+
+--new diagnosis results
+select count(*) from DN_Amgen_EMD_ST4_DX_bladder;
+select count(*) from DN_Amgen_EMD_ST4_DX_colon;
+select count(*) from DN_Amgen_EMD_ST4_DX_rectal;
+select count(*) from DN_Amgen_EMD_ST4_DX_endometrial;
+select count(*) from DN_Amgen_EMD_ST4_DX_kidney;
+select count(*) from DN_Amgen_EMD_ST4_DX_Leukemia;
+select count(*) from DN_Amgen_EMD_ST4_DX_Melanoma;
+select count(*) from DN_Amgen_EMD_ST4_DX_NonHodkin_Lymphoma;
+select count(*) from DN_Amgen_EMD_ST4_DX_Prostate;
+select count(*) from DN_Amgen_EMD_ST4_DX_thyroid;
+--all have 1,118,157 records
+
+
+select distinct(bladder_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_bladder
+group by BC;
+--6,114 patients with bladder_cancer
+
+select distinct(colon_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_colon
+group by BC;
+--22,303 patients with colon cancer
+
+select distinct(rectal_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_rectal
+group by BC;
+--10,082 patients with rectal cancer
+
+select distinct(endometrial_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_endometrial
+group by BC;
+--5,031 patients with endometrial cancer
+
+select distinct(kidney_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_kidney
+group by BC;
+--6,483 patients with kidney cancer
+
+select distinct(Leukemia) as BC, count(*) from DN_Amgen_EMD_ST4_DX_Leukemia
+group by BC;
+--14,324 patients with Leukemia
+
+select distinct(Melanoma) as BC, count(*) from DN_Amgen_EMD_ST4_DX_Melanoma
+group by BC;
+--6,826 patients with melanoma
+
+select distinct(NonHodgkin_Lymphoma) as BC, count(*) from DN_Amgen_EMD_ST4_DX_NonHodgkin_Lymphoma
+group by BC;
+--25,966 patients with NonHodgkin_Lymphoma
+
+select distinct(Prostate_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_Prostate
+group by BC;
+--22,643 patients with Prostate cancer
+
+select distinct(thyroid_cancer) as BC, count(*) from DN_Amgen_EMD_ST4_DX_thyroid
+group by BC;
+--2,498 patients with thyroid cancer
+
+
+
+--this is where I might need to replace pancreatic cancer patients table with DN_Amgen_EMD_ST1
+select * from DN_Amgen_EMD_ST4_DX_joined;
+--1,241,224
+select * from DN_Amgen_EMD_ST4_DX_joined_new;
+--1,241,224
+
+
+select * from DN_Amgen_EMD_ST4_DX_joined_new_counter;
+--1,241,224
+select * from DN_Amgen_C_ST1_therapy;
+--16,755,204
+
+select * from DN_Amgen_EMD_ST1;
+--15,457,712 records
+
+select * from PATS;
+--1,118,157 distinct patients
+
