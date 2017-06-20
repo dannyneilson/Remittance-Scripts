@@ -1,5 +1,7 @@
 --STEP1
---grab CPN based on HCPCS in svc remit record
+--Get claim payment numbers from service payment record based on adjudicated procedure code. We get claim payment numbers when
+adjudicated procedure code is in the service payment record
+--here the Amgen_and_Competitor_Therapies tables is a table I made with drug names and HCPCS and NDC codes
 DROP TABLE IF EXISTS DN_Amgen_R_ST1;
 CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST1 AS
   SELECT claim_payment_number
@@ -13,7 +15,9 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST1 AS
 -- COMMAND ----------
 
 --STEP 2
---connect CPN to CN ->only want the first CN record we find as this is just a way to get a line in on patient info
+--Get claim_numbers from era_linked_record now that we have claim_payment_numbers from service payment record
+--the era linked record table allows us to get claim numbers when we have claim payment numbers, which we will need later to determine 
+patient information
 --left join because we want to keep all claim PAYMENT records even if we can't find a claim for them
 DROP TABLE IF EXISTS DN_Amgen_R_ST2;
 CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST2 AS
@@ -23,15 +27,15 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST2 AS
                 ON CPN.claim_payment_number = lin.claim_payment_number;
 
 --since this is a left join and we expect to see only one claim_number for a given claim_payment_number, 
---we expect to see 11,059,902 records, and we do
 
+STEP 2B
+--we do this because we want to only match on the first
+ ine digits of ndc code since the last two relate to package information
+--
 DROP TABLE IF EXISTS service_record_new;
 CREATE TABLE IF NOT EXISTS service_record_new as
 select claim_number,procedure_x, ndc, substr(ndc,1,9) as ndc_new
 from RWD.service_record;
-
-select * from service_record_new
-where NDC_NEW IS NOT NULL;
 
 -- COMMAND ----------
 
