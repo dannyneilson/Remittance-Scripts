@@ -29,18 +29,17 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST2 AS
 --since this is a left join and we expect to see only one claim_number for a given claim_payment_number, 
 
 STEP 2B
---we do this because we want to only match on the first
- ine digits of ndc code since the last two relate to package information
---
+--we do this because we want to only match on the first nine digits of ndc code since the last two relate to package information
+
 DROP TABLE IF EXISTS service_record_new;
 CREATE TABLE IF NOT EXISTS service_record_new as
-select claim_number,procedure_x, ndc, substr(ndc,1,9) as ndc_new
+select claim_number, procedure_x, ndc, substr(ndc,1,9) as ndc_new
 from RWD.service_record;
 
 -- COMMAND ----------
 
 --STEP 3
---grab CN based on HCPCS and NDC in claim svc record
+--grab CN based on HCPCS and NDC in service record and union to remove duplication
 DROP TABLE IF EXISTS DN_Amgen_C_ST1;
 CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1 AS
   SELECT claim_number
@@ -59,8 +58,10 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1 AS
 -- COMMAND ----------
 
 --STEP 4
---connect CN to CPN -> need to get any and all connect to CPN we can find
---inner join because we only care to keep CNs where we find CPNs
+--connect Claim Numbers to Claim Payment Numbers -> need to get all instances where we can match 
+a claim number to claim payment number using era linked record
+--we do an inner join because we only care to keep Claim numbers where we find Claim payment numbers
+--we union because we want to remove duplicates
 DROP TABLE IF EXISTS DN_Amgen_C_ST2;
 CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST2 AS
   SELECT DISTINCT Claim_payment_number,claim_number
@@ -114,13 +115,12 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST2 AS
                  INNER JOIN rwd.era_linked_record lin
                          ON lin.linked_claim_id_10 = CN.claim_number); 
 
---select * from DN_Amgen_C_ST2;
---we get 2,903,848 rows here-this is because we are only keeping claim_numbers where we can find claim_payment_number
 
 -- COMMAND ----------
 
 --STEP 5
---union step 2 + 4 w/ CPN and CN numbers
+--union step 2 + 4 w/ Claim Payment Numbers and Claim Numbers
+--we are combining result of both submit to remit and remit to submit
 DROP TABLE IF EXISTS DN_Amgen_RC_ST1;
 CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST1 AS
   SELECT Claim_payment_number,Claim_number
@@ -129,13 +129,12 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST1 AS
   SELECT Claim_payment_number,Claim_number
   FROM   DN_Amgen_C_ST2;
 
---select * from DN_Amgen_RC_ST1;
---we get 6,925,656 rows as a result here, indicating a significant amount of dupes taken out, this number makes sense(2.4 mill last time)
-
 -- COMMAND ----------
 
 --STEP 6** IMPORTANT TABLE ***
---Now with all of the CN pull in patientsuffix+ zip if patientrelationship is null or that person/spouse from claim record
+--Now with all of the Claim Numbers pull in patientsuffix + zip when the patient does not have a relationship, else take their DOB 
+instead of zip
+--the patient_id is coming from the claim_record when we have a match on claim number between the remitted claims table and claim_record
 DROP TABLE IF EXISTS DN_Amgen_RC_ST2;
 CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST2 AS
   SELECT CN.Claim_payment_number
@@ -154,14 +153,18 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST2 AS
 
 -- COMMAND ----------
 
---had to make this table to ensure that matching only on first 9 digist of NDC codes
+--STEP 6B
+--had to make this table to ensure that matching only on first 9 digits of NDC codes
 create table if not exists pharmacy_record_pNDC as
 select *,
 substr(PRODUCT_OR_SERVICE_ID,1,9) as pNDC
 from RWD.pharmacy_record;
 
+
+-- COMMAND --------
+
 --STEP 7--
---grab claim number, patient suffix 
+--grab claim number and Patient ID when there is a match on NDC between pharmacy record NDC column and table with drugs of interest 
 DROP TABLE IF EXISTS DN_Amgen_P_ST1;
 CREATE TABLE IF NOT EXISTS DN_Amgen_P_ST1 AS
   SELECT 'NULL' AS claim_payment_number
