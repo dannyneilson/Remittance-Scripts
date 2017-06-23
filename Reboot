@@ -191,3 +191,17 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_EMD_ST1 AS
 
 select * from DN_Amgen_EMD_ST1;
 --we have 15,346,339 records from both medical and pharmacy records
+
+
+--needed to repeat to get the therapy associated w/ the claim_number in case we have claims that only exist because of ndc code
+--grab CN based on HCPCS and NDC in claim svc record
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1_therapy AS
+  SELECT claim_number,SV.ndc, procedure_x
+  FROM   RWD.service_record SV
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON SV.procedure_x = th.HCPCS;
+  UNION ALL
+  SELECT claim_number,svn.ndc,svn.procedure_x
+  FROM   service_record_new svn
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  on svn.ndc_new = th.NDC;
