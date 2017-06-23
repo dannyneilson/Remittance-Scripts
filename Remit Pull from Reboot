@@ -1,6 +1,8 @@
 Remit Pull from Reboot
 
 ---1
+/*For medical claims only, use results of Step 8 from Reboot Script and pull in billing provider info from claim_payment_record, 
+and pull in payment information from service_payment record*/
 
 DROP TABLE IF EXISTS DN_Amgen_EMed_Remit;
 
@@ -75,6 +77,9 @@ describe table RWD.service_payment_record;
 
 --should grab anything that ought to be kept because it has something good in the claim record 
 --need a separate one of these to get good data that wasn't found in the claim_record which is about 3-5K 
+/*Pull in all the remittance information from the output of step 1, which has claims detail, billing provider info, 
+and payment information, and also add in ndc and hcpcs information*/
+
 ---2
 DROP TABLE IF EXISTS DN_Amgen_EMed_Remit_filter_ST1; --no changes for line_allowed_amount
 
@@ -104,6 +109,7 @@ describe table DN_Amgen_EMed_Remit_filter_ST1;
 -- COMMAND ---------- 
 DESCRIBE TABLE DN_Amgen_EMed_Remit_filter_ST1;
 --should grab anything that ought to be kept because it has the correct hcpcs in the remit table ---runthis
+/*Pull out claim info, TH_NDC(set to null), adjudicated_procedure_cd(called TH_Procedure)*/
 ---3
 DROP TABLE IF EXISTS DN_Amgen_EMed_Remit_filter_ST2;
 CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit_filter_ST2 AS 
@@ -172,7 +178,7 @@ select * from Amgen_and_Competitor_therapies;
 
 select * from DN_Amgen_EMed_Remit_filter_ST4 limit 10;
 
---pull out claims that only exist from the remit side 
+--pull out claims that only exist from the remit side
 --4
 DROP TABLE IF EXISTS DN_Amgen_EMed_Remit_filter_ST3;
 CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit_filter_ST3 AS 
