@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST2 AS
 --we get 6,925,662 records which is what we expect
 
 -- COMMAND ----------
+---thjs is where the pharmacy portion begins
 
 --STEP 6B
 --had to make this table to ensure that matching only on first 9 digits of NDC codes
