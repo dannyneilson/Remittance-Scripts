@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit_filter_ST3 AS
 select * from DN_Amgen_EMed_Remit_filter_ST4;
 -- COMMAND ----------
 
---union remit only one to all the others we found 
+--union remit only to all the others we found 
 --5
 
 DROP TABLE IF EXISTS DN_AMgen_EMed_Remit_filter_ST4;
@@ -212,7 +212,7 @@ where TH_NDC <> null;
 describe table DN_Amgen_EMed_Remit_filter_ST1 ;
 -- COMMAND ---------- 
 
---look for distinct data at the claim control level- don't forget patient_ID, and the two new procedure columns
+--look for distinct data at the payer_claim_ontrol_number level- don't forget patient_ID, and the two new procedure columns
 --6
 
 Select * from  DN_Amgen_EMed_Remit_ST1 limit 10; 
@@ -273,6 +273,7 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit_ST1 AS
 
 ----COMMAND---
 ----7---
+/*Using results of step 6, look for OOP amounts at the SVC level*/
 
 DROP TABLE IF EXISTS DN_Amgen_EMed_Remit_ST2; 
 
@@ -354,11 +355,13 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit_ST2 AS
 
 select distinct(line_paid_amount) from DN_Amgen_EMed_Remit_ST2
 order by line_paid_amount desc;
+
 -- COMMAND ---------- 
 ---8
 
 --reboot to create service line OOP calculations 
 --drop table DN_Amgen_EMed_Remit_ST3; 
+/*Adding in OOP and Billing and Remittance information*/
 
 DROP TABLE IF EXISTS DN_Amgen_EMed_Remit_ST3;
 CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit_ST3 AS
@@ -556,6 +559,7 @@ end ) as VARCHAR(16777216)) as Count_Copayment_Adjustment,
    
 -- COMMAND ---------- 
 --8B
+--making sure the OOP amounts are set as 0 when null
 drop table if exists DN_Amgen_EMed_Remit_ST4;
 create table if not exists DN_Amgen_EMed_Remit_ST4 as 
 select *
@@ -578,6 +582,8 @@ select * from DN_Amgen_EMed_Remit_ST3;
 
 -- COMMAND ----------
 --9
+--Using the results of the reboot step 8 table(remitted claims from medical and pharmacy), pull in pharmacy level information only
+
 select * from DN_Amgen_ph_remit;
 --pull in remit info for pharmacy data 
 drop table if exists DN_Amgen_ph_remit;
@@ -623,6 +629,7 @@ select * from DN_Amgen_PH_Remit;
 
 -- COMMAND ---------- 
 --10
+--Using results of step 9, pull in OOP information for patient claims
 
 select * from DN_Amgen_ph_remit_st1;
 drop table if exists DN_Amgen_ph_remit_st1;
@@ -696,7 +703,7 @@ WHERE service_from_date >= '20150301'
       AND service_from_date <= '20170228';
       
 
---creating columns we need
+--adding additional columns we need to union
 drop table if exists DN_Amgen_ph_remit_st2;
 create table DN_Amgen_ph_remit_st2 as
  SELECT 
@@ -743,7 +750,7 @@ create table DN_Amgen_ph_remit_st2 as
   FROM   DN_Amgen_ph_remit_st1;
 
 
---setting columns to type we want
+--setting columns to type we want before unioning
 drop table if exists DN_Amgen_ph_remit_st3;
 create table DN_Amgen_ph_remit_st3 as
 select 
@@ -794,9 +801,12 @@ WHERE service_from_date >= '2015-03-01'
 
 select count(*) from DN_Amgen_ph_remit_st3;
 
---this is where the nulls are coming in, issue caused with unioning-fiexed, had to cast the values correctly
+
 select distinct(TH_NDC) from DN_Amgen_emed_remit_st3;
 --11
+--Union together the results of the pharmacy and medical records claims to get one table with all the different types of claims
+--Gets OOP and B+R information
+
 DROP TABLE IF EXISTS DN_Amgen_eall_remit_st1;
 CREATE TABLE IF NOT EXISTS DN_Amgen_eall_remit_st1 AS 
   SELECT Patient_id, 
@@ -905,8 +915,8 @@ describe table  DN_Amgen_emed_remit_st3;
 --12
 
 --need to join to grab billing provider info, rendering provider info, and payer info  
---added in a row for count of claims set to 1  
-----******** there is a version of this called DN_injectafer_remit_2_ST4 that is essentially the sDNe it just doesn't have a counter value of 1*****
+--added in a row for count of claims set to 1 
+
 DROP TABLE IF EXISTS DN_Amgen_EAll_Remit_ST2_counter; 
 
 CREATE TABLE IF NOT EXISTS DN_Amgen_EAll_Remit_ST2_counter AS 
@@ -935,6 +945,9 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_EAll_Remit_ST2_counter AS
 select * from DN_Amgen_EAll_Remit_ST2_counter;--8,853,64040 records
 
 --COMMAND
+---13
+--just some data formatting here
+
 drop table if exists DN_Amgen_EAll_Remit_ST2_counter_update;
 create table DN_Amgen_EAll_Remit_ST2_counter_update as
 select PATIENT_ID,
@@ -1035,6 +1048,8 @@ select distinct(th_procedure) from DN_Amgen_EAll_Remit_ST2_counter;
 --13
 
 --need to join in diagnosis information
+--this step is not needed if you don't have diagnosis information
+
 drop table if exists DN_Amgen_Final_BandR;
 create table DN_Amgen_Final_BandR as
 Select R.*,
@@ -1060,7 +1075,10 @@ on R.patient_ID = D.patient_id;
 
 select * from DN_Amgen_Final_BandR;--8,772,605
 
+-----COMMAND 
+---14
 --add in billing pr npi and rendering_pr_npi info
+
 drop table if exists DN_Amgen_Final_BandR_new;
 create table DN_Amgen_Final_BandR_new as
 select amg.*,
@@ -1076,7 +1094,11 @@ on amg.billing_pr_npi = cms1.NPI
 left join srn_CMSNPI_LATEST cms2
 on amg.rendering_pr_npi = cms2.NPI;
 
---Maddy did DN_Amgen_Final_BandR_new_reformat(ask her for it)
+---COMMAND 
+---15
+
+--Some data type formatting here
+
 drop table if exists DN_Amgen_Final_BandR_new_reformat;
 create table if not exists DN_amgen_final_bandR_new_reformat as
 select 
@@ -1158,6 +1180,12 @@ select
 ,    RENDERING_LNAME
 ,    RENDERING_SPECIALTY
 from DN_amgen_final_bandR_new;
+
+
+----COMMAND
+---16
+
+--trimming certain fields to prepare for Tableau
 
 drop table if exists DN_Amgen_final_bandr_new_reformat_update;
 create table DN_Amgen_final_bandr_new_reformat_update as
