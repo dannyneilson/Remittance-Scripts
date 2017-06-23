@@ -1,5 +1,8 @@
 describe table DN_Amgen_Final_BandR_new_reformat;
 
+
+--assigning type of coverage, drug name, and also place of service-medical vs. pharmacy
+
 drop table if exists DN_Amgen_Final_BandR_trimmed;
 create table DN_Amgen_Final_BandR_trimmed as 
 select
