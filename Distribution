@@ -1,4 +1,8 @@
+---STEP 1
 --adding in month and payer_type
+--bucketing patient OOP amounts by month
+--run after OOP Landscape script
+
 drop table if exists DN_0518_Amgen_OOP2;
 create table DN_0518_Amgen_OOP2 as
 select
@@ -95,7 +99,6 @@ sum(
 as total_OOP_amount2
 from DN_Amgen_Final_OOP_Landscape
 where patient_id is not null and trim(patient_id) <> '' and patient_id not like 'XXX -%' 
-and patient_oop < '3084'
 group by
 patient_id
 ,case
@@ -160,7 +163,7 @@ order by total_OOP_amount2 desc;
 select count(distinct patient_id), count(*), therapy, year_month, payer_type from DN_0518_Amgen_OOP2
 group by therapy, year_month, payer_type;
 
-
+---STEP 2
 --unioning together all the different OOP columns
 drop table if exists DN_Amgen_unioned_OOP;
 create table DN_Amgen_unioned_OOP as 
@@ -180,7 +183,8 @@ from DN_0518_Amgen_OOP2;
 select *
 from DN_Amgen_unioned_OOP;
 
---getting patients in bins for all payer types
+--STEP 3
+--getting patients in bins for all payer types grouped together, also getting OOP averages
 drop table DN_Amgen_OOP_051817_allpayers;
 create table DN_Amgen_OOP_051817_allpayers as
 select 
@@ -423,203 +427,6 @@ select
     then patient_id
     else null
    end) as count_patients_300plus_oop      
-        
----% of people by deductible range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zeroDeductible
- 
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50Deductible
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100Deductible
-   
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150Deductible
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200Deductible
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250Deductible
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300Deductible
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusDeductible
-   
- --% of people by coinsurance range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zerocoinsurance
-   
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250Coinsurance
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300Coinsurance
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusCoinsurance
-
-  --% of people by copayment range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zerocopayment
-   
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250Copayment
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300Copayment
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusCopayment
-
---% of people by OOP range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zeroOOP
-   
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250OOP
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300OOP
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusOOP
 ,count(distinct patient_id) as allpats
  from DN_Amgen_unioned_OOP
  where year_month is not null
@@ -629,8 +436,11 @@ select
 ,year_month;
 
 select * from DN_Amgen_OOP_051817_allpayers;
+---COMMAND
+--STEP 3
 
 --getting patients in bins for all payer types
+--getting count of patients in OOP bin ranges by month, payers split up individually
 drop table DN_Amgen_OOP_051817_payers;
 create table DN_Amgen_OOP_051817_payers as
 select 
@@ -873,203 +683,7 @@ payer_type
     then patient_id
     else null
    end) as count_patients_300plus_oop      
-        
----% of people by deductible range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zeroDeductible
- 
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50Deductible
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100Deductible
-   
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150Deductible
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200Deductible
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250Deductible
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300Deductible
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_deductible_amount_v2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusDeductible
-   
- --% of people by coinsurance range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zerocoinsurance
-   
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200Coinsurance
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250Coinsurance
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300Coinsurance
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_coinsurance_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusCoinsurance
 
-  --% of people by copayment range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zerocopayment
-   
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200Copayment
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250Copayment
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300Copayment
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_copayment_amount_V2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusCopayment
-
---% of people by OOP range
-  ,count(distinct
-    case when OOP_Value = 0 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_zeroOOP
-   
-  ,count(distinct
-    case when OOP_Value < 50 and OOP_Value >0 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_0to50OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 50 and OOP_Value < 100 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_50to100OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 100 and OOP_Value < 150 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_100to150OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 150 and OOP_Value < 200 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_150to200OOP
-   
-   ,count(distinct
-    case when OOP_Value >= 200 and OOP_Value < 250 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_200to250OOP
-   
-    ,count(distinct
-    case when OOP_Value >= 250 and OOP_Value < 300 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_250to300OOP
-   
-    ,count(distinct
-    case when OOP_Value >= 300 and OOP_Type = 'total_oop_amount2'
-    then patient_id
-    else null
-   end)/count(distinct patient_id) as PER_PatsWith_300plusOOP
 ,count(distinct patient_id) as allpats
  from DN_Amgen_unioned_OOP
   where year_month is not null
@@ -1078,6 +692,10 @@ payer_type
 ,therapy 
 ,year_month;
 
+--COMMAND
+--STEP 4
+
+--unioning together two previous steps so that you have payer type individually, and then all payers grouped together as one
 drop table if exists DN_AMgen_OOP_051817_final_OOP2;
 create table DN_AMgen_OOP_051817_final_OOP2 as
 select * from DN_Amgen_OOP_051817_allpayers
@@ -1087,7 +705,8 @@ select * from DN_Amgen_OOP_051817_payers;
 
 select * from DN_AMgen_OOP_051817_final_OOP2;
 
-
+--COMMAND
+--STEP 5
 ----table to create averages(previously DN_Amgen_OOP_051817_average_final)
 drop table if exists DN_Amgen_OOP_051817_averages;
 create table DN_Amgen_OOP_051817_averages as
@@ -1108,6 +727,7 @@ from DN_AMgen_OOP_051817_final_OOP2 ;
 select * from DN_Amgen_OOP_051817_averages
 where year_month = 'March 2017' and therapy = 'Prolia';
 
+--STEP 6
 --table for bins(changed this from DN_Amgen_OOP_unioned_OOP_new)
 drop table if exists DN_Amgen_OOP_051817_bins;
 create table DN_Amgen_OOP_051817_bins as
