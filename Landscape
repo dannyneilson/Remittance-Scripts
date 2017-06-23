@@ -3,7 +3,7 @@ describe table DN_amgen_final_bandR_new_reformat;
 
 select * from DN_AMgen_FInal_OOP_Landscape;
 
---assigning type of coverage, location of service, drug name
+--assigning type of coverage, location of service, drug name, can be run after reboot, remit, and BandR script have been run
 
 drop table if exists DN_Amgen_Final_OOP_Landscape;
 create table DN_Amgen_Final_OOP_Landscape as 
