@@ -7,7 +7,9 @@ describe table Denial_AM_EAll_Reject_ML2;--used for everything else(made at bott
 --PHARMACY
 
 -- COMMAND ----------
---pull in remit info for pharmacy data 
+--STEP 1
+
+--pull in remit info for pharmacy data only
 drop table if exists DN_Amgen_ph_remit_ML;
 CREATE TABLE IF NOT EXISTS DN_Amgen_ph_remit_ML AS 
   SELECT ori.patient_id, 
@@ -48,6 +50,8 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_ph_remit_ML AS
   WHERE  response_code IN ( 'P', 'R' ) ;
 
 -- COMMAND ----------
+--STEP 2
+--Getting the rejection codes
 
 drop table if exists denial_AM_Celgene_PH_rejectreasons_ST1_ML;
 create table if not exists denial_AM_Celgene_PH_rejectreasons_ST1_ML as
@@ -66,6 +70,9 @@ where claim_status = 'R';
 
 
 -- COMMAND ----------
+--STEP 3
+
+--Getting Denials reasons and other denial related info
 
 drop table if exists denial_AM_Celgene_PH_rejectreasons_ST2_ML;
 create table if not exists denial_AM_Celgene_PH_rejectreasons_ST2_ML as
@@ -147,7 +154,10 @@ group by patient_ID
 ,reject_code_1;
 
 
+---COMMAND
+--STEP 4
 
+--Getting Billing and Remittance and more denials info
 
 drop table if exists denial_AM_Celgene_EMed_Remit_reject_ST2_ML;
 create table denial_AM_Celgene_EMed_Remit_reject_ST2_ML as 
@@ -415,6 +425,9 @@ patient_ID
 
 
 -- COMMAND ----------
+--STEP 5
+
+--Unioning the medical and pharmacy side together
 
 drop table if exists Denial_AM_EAll_Reject_ML;
 create table if not exists Denial_AM_EAll_Reject_ML as
@@ -505,7 +518,9 @@ where Max_Non_Reversal_Date is not null;
 
 
 -- COMMAND ----------
+--STEP 6
 
+--Assigning Type of Coverage, Billing Related info, and also drug name
 
 drop table if exists Denial_AM_EAll_Reject_ML2;
 create table if not exists Denial_AM_EAll_Reject_ML2 as
@@ -1405,6 +1420,8 @@ order by count(*) desc;
 --this just adds in the diagnosis information
 --didn't add this in so far
 -- COMMAND ----------
+
+--STEP 7
 
 drop table if  exists denial_AM_Rejection_ML;
 create table if not exists denial_AM_Rejection_ML as
