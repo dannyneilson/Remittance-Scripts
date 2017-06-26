@@ -9,7 +9,7 @@ Steps to follow for different outputs
 
 2)Remit Pull from Reboot
 
-3)Billing and Remittance(must run Remit first)
+3)Billing and Remittance
 
 
 
@@ -19,7 +19,7 @@ Steps to follow for different outputs
 
 2)Remit Pull from Reboot
 
-3)OOP Landscape(must run Remit first)
+3)OOP Landscape
 
 
 
