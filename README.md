@@ -7,8 +7,6 @@ Steps
 
 2)Remit Pull from Reboot
 
---Any order
-
 3)OOP Landscape
 
 4)OOP Distribution
