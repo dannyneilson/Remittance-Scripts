@@ -1,0 +1,1266 @@
+--Amgen Denials Dashboard script
+
+-- Databricks notebook source
+--PHARMACY
+
+-- COMMAND ----------
+--STEP 1
+
+--Getting Billing and Remittance and more denials info
+
+drop table if exists denial_AM_Celgene_EMed_Remit_reject_ST2_ML;
+create table denial_AM_Celgene_EMed_Remit_reject_ST2_ML as 
+select
+--things that shouldn't change
+patient_ID
+,TH_NDC
+,Claim_status
+,TH_Procedure
+,payer_claim_control_number
+,service_from_date
+,year_date
+,month_date
+,payer_id
+,type_of_coverage
+,type_of_bill
+,billing_pr_npi
+,rendering_pr_npi
+,adjudicated_procedure_cd
+,paid_units_of_service
+--things that might change
+/*claim_status
+line_paid_amount
+line_charge_amount
+date_paid
+claim_received_by_payer_date
+patient_responsibility_amount
+patient_amount_paid
+total_paid_amt*/
+
+--case statement to find latest date for a reversal (negative payment)
+,max(case
+  when claim_status = 22 and line_paid_amount < 0
+  then date_paid
+  else NULL
+end) as Max_Reversal_Date
+--case statement to find latest date for a payment (positive payment)
+,max(case
+  when claim_status not in (4,22) and line_paid_amount >= 0
+  then date_paid
+  else NULL
+end) as Max_Not_Reversal_or_Denial_Date
+--case statement to find latest date for a denial (0 or negative-- should be mostly zero)
+,max(case
+  when claim_status = 4 and line_paid_amount <= 0
+  then date_paid
+  else NULL
+end) as Max_Non_Reversal_Date
+--time to reimbursement (time from date received by payer to latest reimbursement notice)
+,datediff(
+          day, concat(concat(concat(concat(
+            substr(max(date_paid),1,4),'-'),
+            substr(max(date_paid),5,2)),'-'),
+            substr(max(date_paid),7,2))
+          ,
+          concat(concat(concat(concat(
+            substr(min(claim_received_by_payer_date),1,4),'-'),
+            substr(min(claim_received_by_payer_date),5,2)),'-'),
+            substr(min(claim_received_by_payer_date),7,2))
+          
+         ) as Time_To_Reimbursement
+--time since reimbursement (time from last reimbursement notice until current date)
+,datediff(
+          day, '2016-09-19'
+          ,
+          concat(concat(concat(concat(
+            substr(max(date_paid),1,4),'-'),
+            substr(max(date_paid),5,2)),'-'),
+            substr(max(date_paid),7,2))
+          
+         ) as Time_Since_Reimbursement
+--time to submission (time from service date to claim received by payer)
+,datediff(
+          day, 
+            concat(concat(concat(concat(
+            substr(min(claim_received_by_payer_date),1,4),'-'),
+            substr(min(claim_received_by_payer_date),5,2)),'-'),
+            substr(min(claim_received_by_payer_date),7,2))
+          ,
+          concat(concat(concat(concat(
+            substr(max(service_from_date),1,4),'-'),
+            substr(max(service_from_date),5,2)),'-'),
+            substr(max(service_from_date),7,2))
+          
+         ) as Time_To_Submission
+--REBOOT OF PATIENT RESPONSIBILITY BASED ON SERVICE LEVEL
+--NEW OOP -- processed as primary
+/*
+,max(case
+  when claim_status = 1 
+     and coalesce(OOP1,0)+coalesce(OOP2,0)+coalesce(OOP3,0)+coalesce(OOP4,0)+coalesce(OOP5,0) >= 0 
+     and (OOP1) = FALSE OR OOP2) = FALSE OR OOP3) = FALSE OR OOP4) = FALSE OR OOP5) = FALSE)
+  then coalesce(OOP1,0)+coalesce(OOP2,0)+coalesce(OOP3,0)+coalesce(OOP4,0)+coalesce(OOP5,0)
+  else ''
+end) as Max_SVC_Pat_Responsibility_Primary
+--NEW OOP -- processed as anything but denied/reversed/primary
+,max(case
+  when claim_status not in (1,4,22) 
+     and coalesce(OOP1,0)+coalesce(OOP2,0)+coalesce(OOP3,0)+coalesce(OOP4,0)+coalesce(OOP5,0) >= 0
+     and (OOP1) = FALSE OR OOP2) = FALSE OR OOP3) = FALSE OR OOP4) = FALSE OR OOP5) = FALSE)
+  then coalesce(OOP1,0)+coalesce(OOP2,0)+coalesce(OOP3,0)+coalesce(OOP4,0)+coalesce(OOP5,0)
+  else ''
+end) as Max_SVC_Pat_Responsibility_non_Primary
+*/
+--OLD OOPS BELOW
+-- patient_responsiblity 1 -- processed as primary
+,max(case
+  when claim_status = 1 and patient_amount_paid >= 0
+  then patient_amount_paid
+  else NULL
+end) as Max_Pat_Responsibility_1_Primary
+--patient_responsiblity 1 -- processed as anything but denied/reversed/primary
+,max(case
+  when claim_status not in (1,4,22) and patient_amount_paid >= 0
+  then patient_amount_paid
+  else NULL
+end) as Max_Pat_Responsibility_1_non_Primary
+ --you can add these together? 
+--patient_responsiblity 2 -- processed as primary
+,max(case
+  when claim_status = 1 and patient_responsibility_amount >= 0
+  then patient_responsibility_amount
+  else NULL
+end) as Max_Pat_Responsibility_2_primary
+--patient_responsiblity 2 -- processed as anything but denied/reversed/primary
+,max(case
+  when claim_status not in (1,4,22) and patient_responsibility_amount >= 0
+  then patient_responsibility_amount
+  else NULL
+end) as Max_Pat_Responsibility_2_non_primary
+--line amount charged -- processed as primary
+,max(case
+  when line_charge_amount >= 0
+  then line_charge_amount
+  else NULL
+end) as max_line_charge_amount_primary
+--line amount charged -- processed as anything but denied/reversed/primary
+,max(case
+  when claim_status not in (1,4,22) and line_charge_amount >= 0
+  then line_charge_amount
+  else NULL
+end) as max_line_charge_amount_non_primary
+--line amount paid -- processed as primary
+,max(case
+  when claim_status = 1 and line_paid_amount >= 0
+  then line_paid_amount
+  else NULL
+end) as max_line_paid_amount_primary
+--line amount paid -- processed as anything but denied/reversed/primary
+,max(case
+  when claim_status not in (1,4,22) and line_paid_amount >= 0
+  then line_paid_amount
+  else NULL
+end) as max_line_paid_amount_non_primary
+--max total claim payment
+,max(total_paid_amt) as max_total_claim_payment
+---handle rejection reasons: concat of all possible reject reasons
+,max(case
+   when reason_code_1 is not null AND reason_code_2 is null AND reason_code_3 is null AND reason_code_4 is null AND reason_code_5 is null
+   then reason_code_1
+
+   when reason_code_1 is not null AND reason_code_2 is not null AND reason_code_3 is null AND reason_code_4 is null AND reason_code_5 is null
+   then concat(concat(reason_code_1,'/ '),reason_code_2)
+   
+   when reason_code_1 is not null AND reason_code_2 is not null AND reason_code_3 is not null AND reason_code_4 is null AND reason_code_5 is null
+   then concat(concat(concat(concat(reason_code_1,'/ '),reason_code_2),'/ '),reason_code_3)
+   
+   when reason_code_1 is not null AND reason_code_2 is not null AND reason_code_3 is not null AND reason_code_4 is not null AND reason_code_5 is null
+   then concat(concat(concat(concat(concat(concat(reason_code_1,'/ '),reason_code_2),'/ '),reason_code_3),'/ '),reason_code_4)
+   
+   when reason_code_1 is not null AND reason_code_2 is not null AND reason_code_3 is not null AND reason_code_4 is not null AND reason_code_5 is not null
+   then concat(concat(concat(concat(concat(concat(concat(concat(reason_code_1,'/ '),reason_code_2),'/ '),reason_code_3),'/ '),reason_code_4),'/ '),reason_code_5) 
+ 
+   ELSE NULL
+  END)as all_reasons
+--top reject reason by amount
+,max(distinct case
+  when coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_5,0)
+  then reason_code_1
+
+  when coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_1,0)
+    AND coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_5,0)
+  then reason_code_2
+  
+  when coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_1,0)
+    AND coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_5,0)
+  then reason_code_3
+  
+   when coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_1,0)
+    AND coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_5,0)
+  then reason_code_4
+   
+   when coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_1,0)
+  then reason_code_5
+ 
+   else NULL
+   end) as max_amount_reject_reason
+   
+--top reject reason amount
+,max(distinct 
+     case
+  when coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_1,0) > coalesce(adjustment_amount_5,0)
+  then adjustment_amount_1
+
+  when coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_1,0)
+    AND coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_2,0) > coalesce(adjustment_amount_5,0)
+  then adjustment_amount_2
+  
+  when coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_1,0)
+    AND coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_3,0) > coalesce(adjustment_amount_5,0)
+  then adjustment_amount_3
+  
+   when coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_1,0)
+    AND coalesce(adjustment_amount_4,0) > coalesce(adjustment_amount_5,0)
+  then adjustment_amount_4
+   
+   when coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_2,0)
+    AND coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_3,0)
+    AND coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_4,0)
+    AND coalesce(adjustment_amount_5,0) > coalesce(adjustment_amount_1,0)
+  then adjustment_amount_5
+     
+   else NULL
+   end) as max_amount_reject_amount 
+   
+from DN_Amgen_EMed_Remit_ST1 ori
+group by 
+patient_ID
+,Claim_status
+,TH_NDC
+,TH_Procedure
+,payer_claim_control_number
+,service_from_date
+,year_date
+,month_date
+,payer_id
+,type_of_coverage
+,type_of_bill
+,billing_pr_npi
+,rendering_pr_npi
+,adjudicated_procedure_cd
+,paid_units_of_service;
+
+
+
+-- COMMAND ----------
+--STEP 2
+
+drop table if exists Denial_AM_EAll_Reject_ML;
+create table if not exists Denial_AM_EAll_Reject_ML as
+select 
+patient_ID
+,TH_NDC
+,TH_Procedure
+,payer_claim_control_number
+,to_date(service_from_date, 'yyyymmdd')
+,year_date
+,month_date
+,ori.payer_id
+,pyt.payer_nm
+,type_of_coverage
+,type_of_bill
+,billing_pr_npi
+,rendering_pr_npi
+,adjudicated_procedure_cd
+,to_date(Max_Reversal_Date, 'yyyymmdd')
+,to_date(Max_Not_Reversal_or_Denial_Date, 'yyyymmdd')
+,to_date(Max_Non_Reversal_Date, 'yyyymmdd')
+,Time_To_Reimbursement
+,Time_Since_Reimbursement
+,Time_To_Submission
+--,Max_SVC_Pat_Responsibility_Primary
+--,Max_SVC_Pat_Responsibility_non_Primary
+,Max_Pat_Responsibility_1_Primary
+,Max_Pat_Responsibility_1_non_Primary
+,Max_Pat_Responsibility_2_Primary
+,Max_Pat_Responsibility_2_non_Primary
+,max_line_charge_amount_primary
+,max_line_charge_amount_non_primary
+,max_line_paid_amount_primary
+,max_line_paid_amount_non_primary
+,max_total_claim_payment
+,all_reasons
+,max_amount_reject_reason
+,max_amount_reject_amount
+,'Medical' as TYPE
+,paid_units_of_service
+from denial_AM_Celgene_EMed_Remit_reject_ST2_ML ori
+left join rwd.payer_id_map pyt
+on ori.payer_id = pyt.payer_id
+where Max_Non_Reversal_Date is not null;
+
+
+-- COMMAND ----------
+--STEP 3
+
+--Assigning Type of Coverage, Billing Related info, and also drug name
+
+drop table if exists Denial_AM_EAll_Reject_ML2;
+create table if not exists Denial_AM_EAll_Reject_ML2 as
+select 
+
+	PATIENT_ID
+,	PAYER_CLAIM_CONTROL_NUMBER
+,	SERVICE_FROM_DATE
+,	YEAR_DATE
+,	MONTH_DATE
+,	PAYER_ID
+	,upper(PAYER_NM) as Payer_Name,
+	case when TYPE_OF_COVERAGE in ('17', 'ADAP', 'CSH', 'DME', 'ELG', 'INT', 'Null', Null) then 'Other Plan Type'
+	when Type_of_Coverage in ('12', '13', '14', '15', 'CI', 'COM', 'HM', 'LM', 'WC', 'ZZ') then 'Commercial'
+	when  Type_of_Coverage in ('16') then 'Medicare Advantage'
+	when  Type_of_Coverage in ('CH', 'GOV', 'OF', 'VA') then 'VA or Other Government'
+	when type_of_coverage in ('MA', 'MPAB')
+	then 'Medicare A'
+	when type_of_coverage in ('MB','MPB')
+	then 'Medicare B'
+	when type_of_coverage in ('MPD')
+	then 'Medicare D'
+	when type_of_coverage in ('MC', 'MCM', 'MED') then 'Medicaid'
+	when type_of_coverage in ('SPAP', 'STATE') then 'State Plan'
+	end as Plan_Type
+
+,	TYPE_OF_BILL
+,	BILLING_PR_NPI
+,   prov1.PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME as Billing_Pr_Adr_city
+,   prov1.PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_STATE_NAME as Billing_Pr_Adr_State
+,	RENDERING_PR_NPI
+,	MAX_REVERSAL_DATE
+,	MAX_NOT_REVERSAL_OR_DENIAL_DATE
+,	MAX_NON_REVERSAL_DATE
+,	TIME_TO_REIMBURSEMENT
+,	TIME_SINCE_REIMBURSEMENT
+,	TIME_TO_SUBMISSION
+,	MAX_PAT_RESPONSIBILITY_1_PRIMARY
+,	MAX_PAT_RESPONSIBILITY_1_NON_PRIMARY
+,	MAX_PAT_RESPONSIBILITY_2_PRIMARY
+,	MAX_PAT_RESPONSIBILITY_2_NON_PRIMARY
+,	MAX_LINE_CHARGE_AMOUNT_PRIMARY
+,	MAX_LINE_CHARGE_AMOUNT_NON_PRIMARY
+,	MAX_LINE_PAID_AMOUNT_PRIMARY
+,	MAX_LINE_PAID_AMOUNT_NON_PRIMARY
+,	MAX_TOTAL_CLAIM_PAYMENT
+,	CONCAT_REJECT_REASONS as concat_reject_codes
+,	PRIMARY_REJECT_REASON as primary_reject_code
+,	rej.ncpdp_reject_code_description as PRIMARY_REJECT_REASON
+,	PRIMARY_REJECTED_AMOUNT
+,	TYPE
+//Neupogen
+
+,case when SUBSTR(TH_NDC,1,9) = '548682522'
+OR  SUBSTR(TH_NDC,1,9) = '548683050'
+OR SUBSTR(TH_NDC,1,9) = '548685020'
+OR SUBSTR(TH_NDC,1,9) = '555130209'
+OR  SUBSTR(TH_NDC,1,9) = '555130530'
+OR  SUBSTR(TH_NDC,1,9) = '555130546'
+OR   SUBSTR(TH_NDC,1,9) = '555130924'
+
+OR TH_Procedure = 'J1440'
+OR TH_Procedure = 'J1441'
+OR TH_Procedure = 'J1442'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548682522'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548683050'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548685020'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130209'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130530'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130546'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130924'
+
+OR Adjudicated_Procedure_Cd = 'J1440'
+OR Adjudicated_Procedure_Cd = 'J1441'
+OR Adjudicated_Procedure_Cd = 'J1442'
+
+then 'Neupogen'
+
+
+//Neulasta
+when SUBSTR(TH_NDC,1,9) = '555130190'
+OR  SUBSTR(TH_NDC,1,9) = '555130192'
+
+OR TH_Procedure = 'J2505'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130190'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130192'
+
+OR Adjudicated_Procedure_Cd = 'J2505'
+then 'Neulasta'
+
+//Zarxio
+
+when SUBSTR(TH_NDC,1,9) = '613140304'
+OR  SUBSTR(TH_NDC,1,9) = '613140312'
+
+OR TH_Procedure = 'Q5101'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '613140304'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '613140312'
+
+OR Adjudicated_Procedure_Cd = 'Q5101'
+
+then 'Zarxio'
+
+//Leukine
+
+when SUBSTR(TH_NDC,1,9) = '000245843'
+OR  SUBSTR(TH_NDC,1,9) = '000245844'
+
+OR TH_Procedure = 'Q5101'
+OR TH_Procedure = 'J2820'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000245843'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000245844'
+
+OR Adjudicated_Procedure_Cd = 'Q5101'
+OR Adjudicated_Procedure_Cd = 'J2820'
+then 'Leukine'
+
+//Granix
+
+when SUBSTR(TH_NDC,1,9) = '634590910'
+OR  SUBSTR(TH_NDC,1,9) = '634590912'
+
+OR TH_Procedure = 'J1446'
+OR TH_Procedure = 'J1447'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '634590910'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '634590912'
+
+OR Adjudicated_Procedure_Cd = 'J1446'
+OR Adjudicated_Procedure_Cd = 'J1447'
+
+then 'Granix'
+
+//Xgeva
+
+when SUBSTR(TH_NDC,1,9) = '555130730'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130730'
+or (TH_Procedure = 'J0897' and paid_units_of_service = '120')
+or (Adjudicated_Procedure_Cd = 'J0897' and paid_units_of_service = '120')
+then 'Xgeva'
+
+//Prolia
+when SUBSTR(TH_NDC,1,9) = '555130710'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130710'
+or (TH_Procedure = 'J0897' and paid_units_of_service = '60')
+or (Adjudicated_Procedure_Cd = 'J0897' and paid_units_of_service = '60')
+then 'Prolia'
+
+//Zoledronic Acid(Zometa)
+
+when SUBSTR(TH_NDC,1,9) = '000780387'
+OR  SUBSTR(TH_NDC,1,9) = '000780590'
+
+OR TH_Procedure = 'J3489'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780387'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780590'
+
+OR Adjudicated_Procedure_Cd = 'J3489'
+
+then 'Zoledronic Acid(Zometa)'
+
+//Zoledronic Acid(Reclast)
+
+when SUBSTR(TH_NDC,1,9) = '000780435'
+OR TH_Procedure = 'J3488'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780435'
+OR Adjudicated_Procedure_Cd = 'J3488'
+
+then 'Zoledronic Acid(Reclast)'
+
+//Zoledronic Acid(generic)
+
+when SUBSTR(TH_NDC,1,9) = '001439642'
+OR  SUBSTR(TH_NDC,1,9) = '174780324'
+OR SUBSTR(TH_NDC,1,9) = '174780327'
+OR SUBSTR(TH_NDC,1,9) = '231550170'
+OR  SUBSTR(TH_NDC,1,9) = '231550186'
+OR  SUBSTR(TH_NDC,1,9) = '250210801'
+OR   SUBSTR(TH_NDC,1,9) = '250210826'
+OR  SUBSTR(TH_NDC,1,9) = '250210830'
+OR SUBSTR(TH_NDC,1,9) = '420230151'
+OR SUBSTR(TH_NDC,1,9) = '420230163'
+OR  SUBSTR(TH_NDC,1,9) = '420230167'
+OR  SUBSTR(TH_NDC,1,9) = '435980330'
+OR   SUBSTR(TH_NDC,1,9) = '435980331'
+OR  SUBSTR(TH_NDC,1,9) = '459630440'
+OR  SUBSTR(TH_NDC,1,9) = '473350035'
+OR   SUBSTR(TH_NDC,1,9) = '473350962'
+OR  SUBSTR(TH_NDC,1,9) = '531500871'
+OR SUBSTR(TH_NDC,1,9) = '551110685'
+OR SUBSTR(TH_NDC,1,9) = '551110688'
+OR  SUBSTR(TH_NDC,1,9) = '551500266'
+OR  SUBSTR(TH_NDC,1,9) = '556480185'
+OR   SUBSTR(TH_NDC,1,9) = '556480186'
+OR  SUBSTR(TH_NDC,1,9) = '605056110'
+OR  SUBSTR(TH_NDC,1,9) = '633230961'
+OR   SUBSTR(TH_NDC,1,9) = '646790185'
+
+OR TH_Procedure = 'J3487'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '001439642'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '174780324'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '174780327'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '231550170'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '231550186'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '250210801'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '250210826'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '250210830'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '420230151'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '420230163'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '420230167'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '435980330'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '435980331'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '459630440'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '473350035'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '473350962'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '531500871'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '551110685'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '551110688'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '551500266'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '556480185'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '556480186'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '605056110'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '633230961'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '646790185'
+
+OR Adjudicated_Procedure_Cd = 'J3487'
+then 'Zoledronic Acid(generic)'
+
+//Pamidronate
+
+when SUBSTR(TH_NDC,1,9) = '599230601'
+OR  SUBSTR(TH_NDC,1,9) = '599230602'
+OR SUBSTR(TH_NDC,1,9) = '599230603'
+OR SUBSTR(TH_NDC,1,9) = '617030324'
+OR  SUBSTR(TH_NDC,1,9) = '617030325'
+OR  SUBSTR(TH_NDC,1,9) = '617030326'
+OR   SUBSTR(TH_NDC,1,9) = '633230734'
+OR  SUBSTR(TH_NDC,1,9) = '633230735'
+OR SUBSTR(TH_NDC,1,9) = '674570430'
+OR SUBSTR(TH_NDC,1,9) = '674570446'
+OR  SUBSTR(TH_NDC,1,9) = '674570472'
+OR  SUBSTR(TH_NDC,1,9) = '674570610'
+OR   SUBSTR(TH_NDC,1,9) = '000690107'
+OR  SUBSTR(TH_NDC,1,9) = '000690109'
+OR  SUBSTR(TH_NDC,1,9) = '000690186'
+OR   SUBSTR(TH_NDC,1,9) = '005170745'
+OR  SUBSTR(TH_NDC,1,9) = '005170746'
+OR SUBSTR(TH_NDC,1,9) = '007034075'
+OR SUBSTR(TH_NDC,1,9) = '007034085'
+
+OR TH_Procedure = 'C9411'
+OR TH_Procedure = 'J2430'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '599230601'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '599230602'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '599230603'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '617030324'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '617030325'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '617030326'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '633230734'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '633230735'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '674570430'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '674570446'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '674570472'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '674570610'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000690107'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000690186'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '005170745'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '005170746'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '007034075'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '007034085'
+
+OR Adjudicated_Procedure_Cd = 'C9411'
+OR Adjudicated_Procedure_Cd = 'J2430'
+
+then 'Pamidronate'
+
+//Kyprolis
+
+when SUBSTR(TH_NDC,1,9) = '760750101'
+OR  SUBSTR(TH_NDC,1,9) = '760750102'
+
+OR TH_Procedure = 'J9047'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '760750101'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '760750102'
+
+OR Adjudicated_Procedure_Cd = 'J9047'
+
+then 'Kyprolis'
+
+//Empliciti
+
+when SUBSTR(TH_NDC,1,9) = '000032291'
+OR  SUBSTR(TH_NDC,1,9) = '000034522'
+
+OR TH_Procedure = 'J9176'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000032291'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000034522'
+
+OR Adjudicated_Procedure_Cd = 'J9176'
+
+then 'Empliciti'
+
+//Darzalex
+
+when SUBSTR(TH_NDC,1,9) = '578940502'
+OR  SUBSTR(TH_NDC,1,9) = '578940502'
+
+OR TH_Procedure = 'J9145'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '578940502'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '578940502'
+
+OR Adjudicated_Procedure_Cd = 'J9145'
+
+then 'Darzalex'
+
+//Ninlaro
+
+when SUBSTR(TH_NDC,1,9) = '630200078'
+OR  SUBSTR(TH_NDC,1,9) = '630200079'
+OR  SUBSTR(TH_NDC,1,9) = '630200080'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '630200078'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '630200079'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '630200080'
+
+
+then 'Ninlaro'
+
+//Revlimid
+
+when SUBSTR(TH_NDC,1,9) = '595720402'
+OR  SUBSTR(TH_NDC,1,9) = '595720405'
+OR  SUBSTR(TH_NDC,1,9) = '595720410'
+OR  SUBSTR(TH_NDC,1,9) = '595720415'
+OR  SUBSTR(TH_NDC,1,9) = '595720420'
+OR  SUBSTR(TH_NDC,1,9) = '595720425'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '595720402'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '595720405'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '595720410'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '595720415'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '595720420'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '595720425'
+
+
+then 'Revlimid'
+
+//Velcade
+
+when SUBSTR(TH_NDC,1,9) = '630200049'
+OR TH_Procedure = 'J9041'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '630200049'
+OR Adjudicated_Procedure_Cd = 'J9041'
+
+then 'Velcade'
+
+//Imlygic
+
+when SUBSTR(TH_NDC,1,9) = '555130078'
+OR  SUBSTR(TH_NDC,1,9) = '555130079'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130078'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130079'
+
+then 'Imlygic'
+
+//Cotellic
+
+when SUBSTR(TH_NDC,1,9) = '502420717'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '502420717'
+
+
+then 'Cotellic'
+
+//Keytruda
+
+when SUBSTR(TH_NDC,1,9) = '000063026'
+OR  SUBSTR(TH_NDC,1,9) = '000063029'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000063026'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000063029'
+
+then 'Keytruda'
+
+//Mekinist
+
+when SUBSTR(TH_NDC,1,9) = '000780666'
+OR  SUBSTR(TH_NDC,1,9) = '000780668'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780666'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780668'
+
+
+then 'Mekinist'
+
+
+
+//Opdivo
+
+when SUBSTR(TH_NDC,1,9) = '000033772'
+OR  SUBSTR(TH_NDC,1,9) = '000033774'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000033772'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000033774'
+
+
+
+
+then 'Opdivo'
+
+
+
+
+//Tafinlar
+
+
+when SUBSTR(TH_NDC,1,9) = '000780681'
+OR  SUBSTR(TH_NDC,1,9) = '000780682'
+OR  SUBSTR(TH_NDC,1,9) = '001730846'
+OR  SUBSTR(TH_NDC,1,9) = '001730847'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780681'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780682'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '001730846'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '001730847'
+
+
+
+then 'Tafinlar'
+
+
+
+//Yervoy
+
+
+when SUBSTR(TH_NDC,1,9) = '000032327'
+OR  SUBSTR(TH_NDC,1,9) = '000032328'
+
+OR TH_Procedure = 'J9228'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000032327'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000032328'
+
+OR Adjudicated_Procedure_Cd = 'J9228'
+
+then 'Yervoy'
+
+
+
+
+
+//Zelboraf
+
+
+when SUBSTR(TH_NDC,1,9) = '502420090'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '502420090'
+
+
+then 'Zelboraf'
+
+
+
+
+//Blincyto
+
+when SUBSTR(TH_NDC,1,9) = '555130160'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130160'
+
+then 'Blincyto'
+
+
+
+
+//Clolar
+
+
+when SUBSTR(TH_NDC,1,9) = '000245860'
+OR  SUBSTR(TH_NDC,1,9) = '584680100'
+
+OR TH_Procedure = 'J9027'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000245860'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '584680100'
+
+OR Adjudicated_Procedure_Cd = 'J9027'
+then 'Clolar'
+
+
+
+
+//Marqibo
+
+when SUBSTR(TH_NDC,1,9) = '205360322'
+
+OR TH_Procedure = 'J9371'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '205360322'
+
+OR Adjudicated_Procedure_Cd = 'J9371'
+then 'Marqibo'
+
+
+
+
+//Nplate
+
+when SUBSTR(TH_NDC,1,9) = '555130221'
+OR  SUBSTR(TH_NDC,1,9) = '555130222'
+
+OR TH_Procedure = 'J2796'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130221'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130222'
+
+OR Adjudicated_Procedure_Cd = 'J2796'
+then 'Nplate'
+
+
+//Promacta
+
+when SUBSTR(TH_NDC,1,9) = '000074640'
+OR  SUBSTR(TH_NDC,1,9) = '000074641'
+OR  SUBSTR(TH_NDC,1,9) = '000074642'
+OR  SUBSTR(TH_NDC,1,9) = '000074643'
+OR  SUBSTR(TH_NDC,1,9) = '000780684'
+OR  SUBSTR(TH_NDC,1,9) = '000780685'
+OR  SUBSTR(TH_NDC,1,9) = '000780686'
+OR  SUBSTR(TH_NDC,1,9) = '000780687'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000074640'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000074641'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000074642'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000074643'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780684'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780685'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780686'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000780687'
+
+
+then 'Promacta'
+
+
+//Rituxan
+
+
+when SUBSTR(TH_NDC,1,9) = '502420051'
+OR  SUBSTR(TH_NDC,1,9) = '502420053'
+
+OR TH_Procedure = 'J9310'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '502420051'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '502420053'
+
+OR Adjudicated_Procedure_Cd = 'J9310'
+then 'Rituxan'
+
+
+
+
+//Vectibix
+
+when SUBSTR(TH_NDC,1,9) = '555130954'
+OR  SUBSTR(TH_NDC,1,9) = '555130955'
+OR  SUBSTR(TH_NDC,1,9) = '555130956'
+
+OR TH_Procedure = 'J9303'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130954'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130955'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130956'
+
+OR Adjudicated_Procedure_Cd = 'J9303'
+then 'Vectibix'
+
+
+
+
+//Avastin
+
+when SUBSTR(TH_NDC,1,9) = '502420060'
+OR  SUBSTR(TH_NDC,1,9) = '502420061'
+
+OR TH_Procedure = 'J9035'
+OR TH_Procedure = 'C9257'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '502420060'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '502420061'
+
+OR Adjudicated_Procedure_Cd = 'J9035'
+OR Adjudicated_Procedure_Cd = 'C9257'
+then 'Avastin'
+
+
+
+
+
+
+//Cyramza
+
+
+when SUBSTR(TH_NDC,1,9) = '000027669'
+OR  SUBSTR(TH_NDC,1,9) = '000027678'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000027669'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000027678'
+
+
+then 'Cyramza'
+
+
+
+
+
+//Erbitux
+
+when SUBSTR(TH_NDC,1,9) = '667330948'
+OR  SUBSTR(TH_NDC,1,9) = '667330958'
+
+OR TH_Procedure = 'J9055'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '667330948'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '667330958'
+
+OR Adjudicated_Procedure_Cd = 'J9055'
+then 'Erbitux'
+
+
+
+
+//Lonsurf
+
+
+when SUBSTR(TH_NDC,1,9) = '648421020'
+OR  SUBSTR(TH_NDC,1,9) = '648421025'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '648421020'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '648421025'
+
+
+then 'Lonsurf'
+
+
+
+
+//Stivarga
+
+when SUBSTR(TH_NDC,1,9) = '504190171'
+
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '504190171'
+
+then 'Stivarga'
+
+
+
+
+//Zaltrap
+
+when SUBSTR(TH_NDC,1,9) = '000245840'
+OR  SUBSTR(TH_NDC,1,9) = '000245841'
+
+OR TH_Procedure = 'J9400'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000245840'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '000245841'
+
+OR Adjudicated_Procedure_Cd = 'J9400'
+then 'Zaltrap'
+
+//Aranesp
+
+when SUBSTR(TH_NDC,1,9) = '555130002'
+OR  SUBSTR(TH_NDC,1,9) = '555130003'
+OR SUBSTR(TH_NDC,1,9) = '555130004'
+OR SUBSTR(TH_NDC,1,9) = '555130005'
+OR  SUBSTR(TH_NDC,1,9) = '555130006'
+OR  SUBSTR(TH_NDC,1,9) = '555130021'
+OR   SUBSTR(TH_NDC,1,9) = '555130023'
+OR  SUBSTR(TH_NDC,1,9) = '555130025'
+OR SUBSTR(TH_NDC,1,9) = '555130027'
+OR SUBSTR(TH_NDC,1,9) = '555130028'
+OR  SUBSTR(TH_NDC,1,9) = '555130032'
+OR  SUBSTR(TH_NDC,1,9) = '555130053'
+OR   SUBSTR(TH_NDC,1,9) = '555130057'
+OR  SUBSTR(TH_NDC,1,9) = '555130098'
+OR  SUBSTR(TH_NDC,1,9) = '555130110'
+OR   SUBSTR(TH_NDC,1,9) = '555130111'
+
+OR TH_Procedure = 'J0881'
+OR TH_Procedure = 'J0882'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130002'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130003'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130004'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130005'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130006'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130021'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130023'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130025'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130027'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130028'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130032'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130053'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130057'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130098'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130110'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130111'
+
+
+OR Adjudicated_Procedure_Cd = 'J0881'
+OR Adjudicated_Procedure_Cd = 'J0882'
+
+then 'Aranesp'
+
+
+//Epogen
+
+when SUBSTR(TH_NDC,1,9) = '555130126'
+OR  SUBSTR(TH_NDC,1,9) = '555130144'
+OR SUBSTR(TH_NDC,1,9) = '555130148'
+OR SUBSTR(TH_NDC,1,9) = '555130267'
+OR  SUBSTR(TH_NDC,1,9) = '555130283'
+OR  SUBSTR(TH_NDC,1,9) = '555130478'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130126'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130144'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130148'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130267'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130283'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130478'
+
+
+then 'Epogen'
+
+
+//Procrit
+
+when  SUBSTR(TH_NDC,1,9) = '548682523'
+OR  SUBSTR(TH_NDC,1,9) = '548685673'
+OR SUBSTR(TH_NDC,1,9) = '548685802'
+OR SUBSTR(TH_NDC,1,9) = '596760302'
+OR  SUBSTR(TH_NDC,1,9) = '596760303'
+OR  SUBSTR(TH_NDC,1,9) = '596760304'
+OR   SUBSTR(TH_NDC,1,9) = '596760310'
+OR  SUBSTR(TH_NDC,1,9) = '596760312'
+OR  SUBSTR(TH_NDC,1,9) = '596760320'
+OR   SUBSTR(TH_NDC,1,9) = '596760340'
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548682523'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548685673'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548685802'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760302'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760303'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760304'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760310'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760312'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760320'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '596760340'
+
+then 'Procrit'
+
+//Enbrel
+
+when SUBSTR(TH_NDC,1,9) = '584060425'
+OR  SUBSTR(TH_NDC,1,9) = '584060435'
+OR  SUBSTR(TH_NDC,1,9) = '584060445'
+OR  SUBSTR(TH_NDC,1,9) = '584060455'
+
+OR TH_Procedure = 'J1438'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '584060425'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '584060435'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '584060445'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '584060455'
+
+OR Adjudicated_Procedure_Cd = 'J1438'
+then 'Enbrel'
+
+//Sensipar
+
+when SUBSTR(TH_NDC,1,9) = '681514740'
+OR  SUBSTR(TH_NDC,1,9) = '691890730'
+OR SUBSTR(TH_NDC,1,9) = '538080577'
+OR SUBSTR(TH_NDC,1,9) = '538080578'
+OR  SUBSTR(TH_NDC,1,9) = '548685616'
+OR  SUBSTR(TH_NDC,1,9) = '551544875'
+OR   SUBSTR(TH_NDC,1,9) = '551544876'
+OR  SUBSTR(TH_NDC,1,9) = '555130073'
+OR  SUBSTR(TH_NDC,1,9) = '555130074'
+OR   SUBSTR(TH_NDC,1,9) = '555130075'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '681514740'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '691890730'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '538080577'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '538080578'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '548685616'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '551544875'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '551544876'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130073'
+OR  SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130074'
+OR   SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130075'
+
+
+then 'Sensipar'
+
+
+//Corlanor
+
+when SUBSTR(TH_NDC,1,9) = '555130800'
+OR  SUBSTR(TH_NDC,1,9) = '555130810'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130800'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130810'
+
+
+
+then 'Corlanor'
+
+//Repatha
+
+when SUBSTR(TH_NDC,1,9) = '555130750'
+OR  SUBSTR(TH_NDC,1,9) = '555130760'
+OR  SUBSTR(TH_NDC,1,9) = '555130770'
+
+
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130750'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130760'
+OR SUBSTR(Adjudicated_Procedure_Cd,1,9) = '555130770'
+
+
+then 'Repatha'
+
+ELSE 'Unknown'
+END as Therapy
+
+from Denial_AM_EAll_Reject_ML ori
+	LEFT JOIN PHARMACY_REJECT_CODE_description rej
+	       on ori.PRIMARY_REJECT_REASON = rej.NCPDP_reject_code
+	--join to billing provider  
+         LEFT JOIN sandbox.srn_CMSNPI_LATEST prov1 
+                ON ori.billing_pr_npi = prov1.npi
+where service_from_date > '2015-03-31' and service_from_date < '2017-04-01';
+
+
+
+
+
+
+
+
+--checking to see that we get all the therapies, we do
+select therapy, count(*)
+from Denial_AM_EAll_Reject_ML2
+group by therapy
+order by count(*) desc;
+
+
+
+
+
+
+
+
+
+
+--this just adds in the diagnosis information
+--didn't add this in so far
+-- COMMAND ----------
+
+--STEP 4
+
+drop table if  exists denial_AM_Rejection_ML;
+create table if not exists denial_AM_Rejection_ML as
+select reject.*
+,pancreatic_cancer	
+,breast_cancer	
+,lung_cancer	
+,multiple_myeloma	
+,bladder_cancer	
+,colon_cancer	
+,rectal_cancer	
+,endometrial_cancer	
+,kidney_cancer	
+,leukemia	
+,melanoma	
+,Nonhodgkin_lymphoma	
+,prostate_cancer	
+,thyroid_cancer
+from Denial_AM_EAll_Reject_ML reject
+left join DN_Amgen_EMD_ST4_DX_joined_new_counter pats
+on reject.patient_id = pats.patient_id;
+
+
+-- COMMAND ----------
+
+select * from Denial_AM_EAll_Reject where primary_reject_reason = null
+
+-- COMMAND ----------
+
+select count(*) from Denial_AM_EAll_Reject 
+
+-- COMMAND ----------
+
+SELECT * FROM denial_AM_Rejection
+
+-- COMMAND ----------
+
+SELECT * FROM Denial_AM_EAll_Reject
