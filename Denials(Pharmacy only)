@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_ph_remit_ML AS
          transaction_count_ 
   FROM   (SELECT DISTINCT claim_number, 
                           patient_id 
-          FROM   DN_Amgen_Pharmacyonly)ORI 
+          FROM   DN_Amgen_Pharmacyonly) ORI 
          INNER JOIN RWD.pharmacy_record ph 
                  ON ORI.claim_number = ph.emdeon_tdr_claimid_or_uow_agn 
   WHERE  response_code IN ( 'P', 'R' ) ;
