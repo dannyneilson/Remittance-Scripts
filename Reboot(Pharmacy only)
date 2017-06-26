@@ -13,7 +13,7 @@ from RWD.pharmacy_record;
 
 --STEP 2--
 --grab claim number and Patient ID when there is a match on NDC between pharmacy record NDC column and table with drugs of interest 
-DROP TABLE IF EXISTS DN_Amgen_P_ST1;
+DROP TABLE IF EXISTS DN_Amgen_Pharmacyonly;
 CREATE TABLE IF NOT EXISTS DN_Amgen_P_ST1 AS
   SELECT 'NULL' AS claim_payment_number
          ,emdeon_tdr_claimid_or_uow_agn AS claim_number
@@ -22,20 +22,7 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_P_ST1 AS
   INNER JOIN Amgen_and_Competitor_therapies th
 ON ph.pNDC = th.NDC;
   
-  select * from DN_Amgen_P_ST1;
 
--- COMMAND ----------
 
---STEP 3
---union pharmacy claims w/ patient ID to medical claims w/ patient ID
-DROP TABLE IF EXISTS DN_Amgen_EMD_ST1;
-CREATE TABLE IF NOT EXISTS DN_Amgen_Pharmacyonly_ST1 AS
-  SELECT claim_payment_number,claim_number,Patient_ID,'Pharmacy' AS Type
-  FROM   DN_Amgen_P_ST1
-  UNION
-  SELECT claim_payment_number,claim_number,Patient_ID,'EMD_Med' AS Type
-  FROM   DN_Amgen_RC_ST2; 
 
-select * from DN_Amgen_EMD_ST1;
---we have 15,346,339 records from both medical and pharmacy records
 
