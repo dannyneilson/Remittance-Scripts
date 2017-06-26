@@ -1,0 +1,655 @@
+Remit Pull from Reboot
+
+--PHARMACY
+
+-- COMMAND ----------
+--9
+--Using the results of the reboot step 8 table(remitted claims from medical and pharmacy), pull in pharmacy level information only
+
+select * from DN_Amgen_ph_remit;
+--pull in remit info for pharmacy data 
+drop table if exists DN_Amgen_ph_remit;
+CREATE TABLE IF NOT EXISTS DN_Amgen_ph_remit AS 
+  SELECT ori.patient_id, 
+         amount_of_copay_or_coinsurance as Copayment_Amount,
+         amount_applied_to_periodic_deductible as Deductible_Amount,
+         emdeon_tdr_claimid_or_uow_agn AS claim_payment_number, 
+         'NULL'                        AS payer_claim_control_number,
+         response_code                 AS claim_status, 
+         Substr(date_of_service, 1, 4) AS year_date, 
+         Substr(date_of_service, 5, 2) AS month_date, 
+         payer_id, 
+         plan_name, 
+         national_provider_id          AS billing_pr_npi, 
+         'NULL'                        AS billing_pr_name, 
+         'NULL'                        AS billing_pr_adr_line1, 
+         'NULL'                        AS billing_pr_adr_city, 
+         'NULL'                        AS billing_pr_adr_state, 
+         prescriber_id                 AS rendering_pr_npi, 
+         prescriber_last_name          AS rendering_pr_last_or_org_name, 
+         total_Amount_paid             AS total_paid_Amt, 
+         'NULL'                        AS line_number, 
+         date_of_service, 
+         gross_Amount_due_submitted    AS line_charge_Amount, 
+         total_Amount_paid             AS line_paid_Amount, 
+         product_or_service_id         AS ndc, 
+         type_of_payment               AS type_of_coverage, 
+         patient_paid_Amount_submitted AS patient_Amount_paid, 
+         patient_pay_Amount            AS patient_responsibility_Amount, 
+         'Pharmacy'                    AS type_of_bill, 
+         transaction_code, 
+         transaction_count_
+  FROM   (SELECT DISTINCT claim_number, 
+                          patient_id 
+          FROM   DN_Amgen_pharmacyonly
+          WHERE  type = 'Pharmacy')ORI 
+         INNER JOIN RWD.pharmacy_record ph 
+                 ON ORI.claim_number = ph.emdeon_tdr_claimid_or_uow_agn 
+  WHERE  response_code IN ( 'P', 'R' );
+
+select * from DN_Amgen_PH_Remit;
+
+-- COMMAND ---------- 
+--10
+--Using results of step 9, pull in OOP information for patient claims
+
+select * from DN_Amgen_ph_remit_st1;
+drop table if exists DN_Amgen_ph_remit_st1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_ph_remit_st1 AS 
+  SELECT 
+  --things that will constitute a unique attempt to procure a therapy 
+  patient_id, 
+  date_of_service, 
+  year_date, 
+  month_date, 
+  billing_pr_npi, 
+  ndc, 
+  payer_id, 
+  plan_name, 
+  type_of_coverage, 
+  rendering_pr_npi, 
+  type_of_bill,
+  Copayment_Amount,
+  Deductible_Amount
+   ,ifnull(Deductible_Amount, 0) + ifnull(Copayment_Amount, 0) as Patient_OOP
+  --CASE statement to find latest date for a denial (0 or negative-- should be mostly zero) 
+  --it'll just be the date of service  so really this is just a flag that says the claim was at least once denied on a given date
+  , 
+  Max(CASE 
+        WHEN claim_status = 'R' THEN date_of_service 
+        ELSE NULL
+      END) AS Max_Non_Reversal_Date 
+  --CASE statement to find latest date for a payment (positive payment) 
+  --it'll just be the date of service  so really this is just a flag that says the claim was at least once paid on a given date
+  , 
+  Max(CASE 
+        WHEN claim_status = 'P' 
+             AND Cast(line_paid_Amount AS FLOAT) >= 0 THEN date_of_service 
+        ELSE NULL
+      END) AS Max_Not_Reversal_or_Denial_Date, 
+  Max(CASE 
+        WHEN claim_status = 'P' THEN Cast(patient_responsibility_Amount AS FLOAT 
+                                     ) 
+        ELSE NULL 
+      END) AS Max_SVC_Pat_Responsibility_Primary, 
+  Max(CASE 
+        WHEN claim_status = 'P' 
+             AND Cast(line_paid_Amount AS FLOAT) >= 0 THEN Cast( 
+        line_paid_Amount AS FLOAT) 
+        ELSE NULL 
+      END) AS max_line_paid_Amount_primary, 
+  Max(CASE 
+        WHEN claim_status = 'P' 
+             AND Cast(line_charge_Amount AS FLOAT) >= 0 THEN Cast( 
+        line_charge_Amount AS FLOAT) 
+        ELSE NULL 
+      END) AS max_line_charge_Amount_primary 
+  FROM   DN_Amgen_ph_remit 
+  GROUP  BY patient_id, 
+            date_of_service, 
+            year_date, 
+            month_date, 
+            billing_pr_npi, 
+            ndc, 
+            payer_id, 
+            plan_name, 
+            type_of_coverage, 
+            rendering_pr_npi, 
+            type_of_bill
+            ,Copayment_Amount
+            ,Deductible_Amount;
+            
+
+select distinct(adjudicated_procedure_cd) from DN_Amgen_ph_remit_st3
+WHERE service_from_date >= '20150301' 
+      AND service_from_date <= '20170228';
+      
+
+--adding additional columns we need to union
+drop table if exists DN_Amgen_ph_remit_st2;
+create table DN_Amgen_ph_remit_st2 as
+ SELECT 
+ Patient_id, 
+         NULL            AS TH_NDC, 
+         NULL            AS TH_Procedure, 
+         NULL            AS Payer_claim_control_number, 
+         date_of_service AS Service_from_date, 
+         Year_date, 
+         Month_date, 
+         Payer_id, 
+         plan_name       AS Payer_nm, 
+         Type_of_coverage, 
+         Type_of_bill, 
+         Billing_pr_npi, 
+         Rendering_pr_npi, 
+         substr(ndc,1,9)             AS Adjudicated_procedure_cd, 
+         Deductible_Amount,
+         CASE WHEN Deductible_Amount > 0 THEN 1 ELSE 0 END AS Count_Deductible_Adjustment,              
+         NULL               AS Coinsurance_Amount,
+         NULL               AS Count_Coinsurance_Adjustment,
+         Copayment_Amount,
+         CASE WHEN Copayment_Amount > 0 THEN 1 ELSE 0 END AS Count_Copayment_Adjustment,
+         Patient_OOP, 
+          CASE WHEN Patient_OOP > 0 THEN 1 ELSE 0 END AS Count_OOP_Adjustment,
+         --OOP stuff here
+         NULL            AS Max_Reversal_Date, 
+         Max_not_reversal_or_denial_date, 
+         Max_non_reversal_date, 
+         NULL            AS Time_To_Reimbursement, 
+         NULL            AS Time_Since_Reimbursement, 
+         NULL            AS Time_To_Submission, 
+         Max_svc_pat_responsibility_primary, 
+         NULL            AS Max_SVC_Pat_Responsibility_non_Primary, 
+         NULL            AS Max_Pat_Responsibility_1_Primary, 
+         NULL            AS Max_Pat_Responsibility_1_non_Primary, 
+         NULL            AS Max_Pat_Responsibility_2_Primary, 
+         NULL            AS Max_Pat_Responsibility_2_non_Primary, 
+         Max_line_charge_Amount_primary, 
+         NULL            AS Max_line_charge_Amount_non_primary, 
+         Max_line_paid_Amount_primary, 
+         NULL            AS Max_line_paid_Amount_non_primary, 
+         NULL            AS Max_total_claim_payment 
+  FROM   DN_Amgen_ph_remit_st1;
+
+
+--setting columns to type we want before unioning
+drop table if exists DN_Amgen_ph_remit_st3;
+create table DN_Amgen_ph_remit_st3 as
+select 
+cast(TH_NDC as VARCHAR(16777216)) as TH_NDC,
+Cast(TH_Procedure as VARCHAR(16777216)) as TH_Procedure,
+Cast(Payer_Claim_Control_Number as VARCHAR(16777216)) as Payer_Claim_Control_Number,
+Cast(Max_Reversal_Date as VARCHAR(16777216)) as Max_Reversal_Date,
+Cast(Time_to_Reimbursement as Number(9,0)) as Time_to_Reimbursement,
+Cast(Time_Since_Reimbursement as Number(9,0)) as Time_Since_Reimbursement,
+Cast(Time_to_Submission as Number(9,0)) as Time_to_Submission,
+Cast(Max_SVC_Pat_Responsibility_non_Primary as Float) as Max_SVC_Pat_Responsibility_Non_Primary,
+Cast(Max_Pat_Responsibility_1_Primary as VARCHAR(16777216)) as Max_Pat_Responsibility_1_Primary,
+Cast(Max_Pat_Responsibility_1_non_Primary as VARCHAR(16777216)) as Max_Pat_Responsibility_1_non_Primary,
+Cast(Max_Pat_Responsibility_2_Primary as VARCHAR(16777216)) as Max_Pat_responsibility_2_Primary,
+Cast(Max_Pat_Responsibility_2_non_Primary as VARCHAR(16777216)) as Max_Pat_responsibility_2_non_Primary,
+Cast(Max_line_Charge_Amount_non_Primary as VARCHAR(16777216)) as Max_line_charge_Amount_non_Primary,
+Cast(Max_Line_Paid_Amount_non_Primary as VARCHAR(16777216)) as Max_Line_Paid_Amount_non_Primary,
+Cast(Max_Total_Claim_Payment as VARCHAR(16777216)) as Max_Total_Claim_Payment,
+--new OOP stuff
+Cast(Deductible_Amount as VARCHAR(16777216)) as Deductible_Amount,
+Cast(Count_Deductible_Adjustment  as VARCHAR(16777216)) as Count_Deductible_Adjustment,         
+Cast(Coinsurance_Amount as VARCHAR(16777216)) as Coinsurance_Amount,
+Cast(Count_Coinsurance_Adjustment as VARCHAR(16777216)) as Count_Coinsurance_Adjustment,
+Cast(Copayment_Amount as VARCHAR(16777216)) as Copayment_Amount,
+Cast(Count_Copayment_Adjustment as VARCHAR(16777216)) as Count_Copayment_Adjustment,
+Cast(Patient_OOP as VARCHAR(16777216)) as Patient_OOP,
+Cast(Count_OOP_Adjustment as VARCHAR(16777216)) as Count_OOP_Adjustment,
+--other things
+Patient_id, 
+ Year_date, 
+         Month_date, 
+         Payer_id, 
+          Type_of_coverage, 
+         cast(Type_of_bill as VARCHAR(16777216)) as Type_of_bill, 
+         Billing_pr_npi, 
+         Rendering_pr_npi, 
+            cast(Max_not_reversal_or_denial_date as VARCHAR(16777216)) as Max_not_reversal_or_denial_date,
+         cast(Max_non_reversal_date as VARCHAR(16777216)) as Max_non_reversal_date,
+          Max_svc_pat_responsibility_primary, 
+         cast(Max_line_charge_Amount_primary as VARCHAR(16777216)) as Max_line_charge_Amount_Primary,
+          cast(Max_line_paid_Amount_primary as VARCHAR(16777216)) as Max_line_paid_Amount_Primary,  
+ cast(Service_from_date as VARCHAR(16777216)) as Service_from_date,
+Adjudicated_procedure_cd, 
+payer_nm
+from DN_Amgen_ph_remit_St2
+WHERE service_from_date >= '2015-03-01' 
+      AND service_from_date <= '2017-03-31';
+
+select count(*) from DN_Amgen_ph_remit_st3;
+
+
+select distinct(TH_NDC) from DN_Amgen_emed_remit_st3;
+--11
+--Union together the results of the pharmacy and medical records claims to get one table with all the different types of claims
+--Gets OOP and B+R information
+
+DROP TABLE IF EXISTS DN_Amgen_eall_remit_st1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_eall_remit_st1 AS 
+  SELECT Patient_id, 
+          TH_NDC, 
+          TH_Procedure, 
+         Payer_claim_control_number, 
+         Service_from_date, 
+         Year_date, 
+         Month_date, 
+         Payer_id, 
+         Payer_nm, 
+         Type_of_coverage, 
+         Type_of_bill, 
+         NULL as paid_units_of_service,
+         Billing_pr_npi, 
+         Rendering_pr_npi, 
+         Adjudicated_procedure_cd, 
+         Max_Reversal_Date, 
+         Max_not_reversal_or_denial_date, 
+         Max_non_reversal_date, 
+         Time_To_Reimbursement, 
+        Time_Since_Reimbursement, 
+          Time_To_Submission, 
+         Max_svc_pat_responsibility_primary, 
+         Max_SVC_Pat_Responsibility_non_Primary, 
+         Max_Pat_Responsibility_1_Primary, 
+         Max_Pat_Responsibility_1_non_Primary, 
+         Max_Pat_Responsibility_2_Primary, 
+         Max_Pat_Responsibility_2_non_Primary, 
+         Max_line_charge_Amount_primary, 
+          Max_line_charge_Amount_non_primary, 
+         Max_line_paid_Amount_primary, 
+         Max_line_paid_Amount_non_primary, 
+         NULL as Max_line_allowed_amount_primary,
+         NULL as Max_line_allowed_amount_non_primary,
+         Max_total_claim_payment,
+         Deductible_Amount,
+         Count_Deductible_Adjustment,
+         Coinsurance_Amount,
+         Count_Coinsurance_Adjustment,
+         Copayment_Amount,
+         Count_Copayment_Adjustment,
+         Patient_OOP,
+         Count_OOP_Adjustment
+  FROM   DN_Amgen_ph_remit_st3
+         LEFT JOIN rwd.payer_id_map pyt 
+                ON ori.payer_id = pyt.payer_id;
+      
+      select distinct(payer_claim_control_number) from DN_Amgen_eall_remit_st1;--~3,159,944
+     select distinct(payer_claim_control_number) from  DN_Amgen_ph_remit_st3;--0 records
+     select distinct(payer_claim_controL_number) from DN_Amgen_emed_remit_st3;--3,159,144
+
+describe table DN_Amgen_eall_remit_st1;
+    
+      
+describe table DN_Amgen_ph_remit_st3;
+describe table  DN_Amgen_emed_remit_st3;
+
+
+
+-- COMMAND ----------  
+--12
+
+--need to join to grab billing provider info, rendering provider info, and payer info  
+--added in a row for count of claims set to 1 
+
+DROP TABLE IF EXISTS DN_Amgen_EAll_Remit_ST2_counter; 
+
+CREATE TABLE IF NOT EXISTS DN_Amgen_EAll_Remit_ST2_counter AS 
+  SELECT ori.*, 
+         org.org_business_name, 
+         org.last_name                                               AS billing_lname, 
+         org.first_name                                              AS billing_fname, 
+         org.business_practice_location_address_city_name, 
+         org.business_practice_location_address_state_name, 
+         org.business_practice_location_address_postal_code, 
+         prov1.PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME, 
+         prov1.PROVIDER_BUSINESS_MAILING_ADDRESS_STATE_NAME, 
+         prov2.PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME AS rendering_city, 
+         prov2.PROVIDER_BUSINESS_MAILING_ADDRESS_STATE_NAME         AS rendering_state, 
+         1                                                           AS number_of_claims 
+  FROM   DN_Amgen_EAll_Remit_ST1 ori 
+         --join to billing provider  
+         LEFT JOIN rwd.ref_facility_npis org 
+                ON ori.billing_pr_npi = org.npi 
+         LEFT JOIN srn_CMSNPI_LATEST prov1 
+                ON ori.billing_pr_npi = prov1.npi 
+         --join to rendering provider  
+         LEFT JOIN srn_CMSNPI_LATEST prov2 
+                ON ori.rendering_pr_npi = prov2.npi;
+
+select * from DN_Amgen_EAll_Remit_ST2_counter;--8,853,64040 records
+
+--COMMAND
+---13
+--just some data formatting here
+
+drop table if exists DN_Amgen_EAll_Remit_ST2_counter_update;
+create table DN_Amgen_EAll_Remit_ST2_counter_update as
+select PATIENT_ID,
+TH_NDC,
+TH_PROCEDURE,
+PAYER_CLAIM_CONTROL_NUMBER,
+case when length(SERVICE_FROM_DATE) = 8 
+then to_date(SERVICE_FROM_DATE, 'yyyymmdd') 
+else to_date(substr(SERVICE_FROM_DATE, 1,10), 'yyyy-mm-dd') 
+end as service_from_date,
+YEAR_DATE,
+MONTH_DATE,
+PAYER_ID,
+PAYER_NM,
+TYPE_OF_COVERAGE,
+TYPE_OF_BILL,
+paid_units_of_service,
+BILLING_PR_NPI,
+RENDERING_PR_NPI,
+ADJUDICATED_PROCEDURE_CD,
+case when length(Max_Reversal_Date) = 8 
+then to_date(Max_Reversal_Date, 'yyyymmdd') 
+else to_date(substr(Max_Reversal_Date, 1,10), 'yyyy-mm-dd') 
+end as Max_Reversal_Date,
+case when length(Max_Not_Reversal_Or_Denial_Date) = 8 
+then to_date(Max_Not_Reversal_Or_Denial_Date, 'yyyymmdd') 
+else to_date(substr(Max_Not_Reversal_Or_Denial_Date, 1,10), 'yyyy-mm-dd') 
+end as Max_Not_Reversal_Or_Denial_Date,
+case when length(Max_Non_Reversal_Date) = 8 
+then to_date(Max_Non_Reversal_Date, 'yyyymmdd') 
+else to_date(substr(Max_Non_Reversal_Date, 1,10), 'yyyy-mm-dd') 
+end as Max_Non_Reversal_Date,
+cast(Time_To_Reimbursement as VARCHAR(16777216)) as Time_To_Reimbursement,
+cast(Time_Since_Reimbursement as VARCHAR(16777216)) as Time_Since_Reimbursement,
+cast(Time_To_Submission as VARCHAR(16777216)) as Time_To_Submission,
+cast(Max_SVC_Pat_Responsibility_Primary as VARCHAR(16777216)) as Max_SVC_Pat_Responsibility_Primary,
+cast(Max_SVC_Pat_Responsibility_Non_Primary as VARCHAR(16777216)) as Max_SVC_Pat_Responsibility_Non_Primary,
+
+	
+cast(MAX_PAT_RESPONSIBILITY_1_PRIMARY as VARCHAR(16777216)) as MAX_PAT_RESPONSIBILITY_1_PRIMARY,
+cast(MAX_PAT_RESPONSIBILITY_1_NON_PRIMARY as VARCHAR(16777216)) as MAX_PAT_RESPONSIBILITY_1_NON_PRIMARY,
+cast(MAX_PAT_RESPONSIBILITY_2_PRIMARY as VARCHAR(16777216)) as MAX_PAT_RESPONSIBILITY_2_PRIMARY,
+cast(MAX_PAT_RESPONSIBILITY_2_NON_PRIMARY as VARCHAR(16777216)) as MAX_PAT_RESPONSIBILITY_2_NON_PRIMARY,
+
+cast(Max_line_charge_Amount_primary as VARCHAR(16777216)) as Max_line_charge_Amount_primary,
+cast(Max_line_charge_Amount_non_primary as VARCHAR(16777216)) as Max_line_charge_Amount_non_primary,
+cast(Max_line_paid_Amount_primary as VARCHAR(16777216)) as Max_line_paid_Amount_primary,
+cast(Max_line_paid_Amount_non_primary as VARCHAR(16777216)) as Max_line_paid_Amount_non_primary,
+cast(Max_line_allowed_amount_primary as VARCHAR(16777216)) as Max_line_allowed_amount_primary,
+cast(Max_line_allowed_amount_non_primary as VARCHAR(16777216)) as Max_line_allowed_amount_non_primary,
+
+MAX_TOTAL_CLAIM_PAYMENT,
+DEDUCTIBLE_AMOUNT,
+COUNT_DEDUCTIBLE_ADJUSTMENT,
+COINSURANCE_AMOUNT,
+COUNT_COINSURANCE_ADJUSTMENT,
+COPAYMENT_AMOUNT,
+COUNT_COPAYMENT_ADJUSTMENT,
+PATIENT_OOP,
+COUNT_OOP_ADJUSTMENT,
+ORG_BUSINESS_NAME,
+BILLING_LNAME,
+BILLING_FNAME,
+BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME,
+BUSINESS_PRACTICE_LOCATION_ADDRESS_STATE_NAME,
+BUSINESS_PRACTICE_LOCATION_ADDRESS_POSTAL_CODE,
+PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME,
+PROVIDER_BUSINESS_MAILING_ADDRESS_STATE_NAME,
+RENDERING_CITY,
+RENDERING_STATE,
+NUMBER_OF_CLAIMS
+from DN_Amgen_EAll_Remit_ST2_counter;
+
+-- COMMAND ---------- 
+
+select * from DN_Amgen_EAll_Remit_ST2_counter_update;
+
+
+-- COMMAND ---------- 
+--this is not limited to dates of interest
+SELECT DISTINCT TH_NDC, 
+                TH_Procedure 
+FROM   DN_Amgen_EAll_Remit_ST2_counter;
+
+
+-- COMMAND ---------- 
+
+select distinct(adjudicated_procedure_cd) from DN_Amgen_EAll_Remit_ST2_counter;
+--16,701 
+select distinct(th_ndc) from DN_Amgen_EAll_Remit_ST2_counter;
+--674
+select distinct(th_procedure) from DN_Amgen_EAll_Remit_ST2_counter;
+--34
+
+
+
+--TABLE FOR UPDATED DASHBOARD
+--13
+
+--need to join in diagnosis information
+--this step is not needed if you don't have diagnosis information
+
+drop table if exists DN_Amgen_Final_BandR;
+create table DN_Amgen_Final_BandR as
+Select R.*,
+D.PANCREATIC_CANCER,
+D.BREAST_CANCER,
+D.LUNG_CANCER,
+D.MULTIPLE_MYELOMA,
+D.BLADDER_CANCER,
+D.COLON_CANCER,
+D.RECTAL_CANCER,
+D.ENDOMETRIAL_CANCER,
+D.KIDNEY_CANCER,
+D.LEUKEMIA,
+D.MELANOMA,
+D.NONHODGKIN_LYMPHOMA,
+D.PROSTATE_CANCER,
+D.THYROID_CANCER,
+D.COUNTER
+from DN_Amgen_EAll_Remit_ST2_counter_update R
+left join DN_Amgen_EMD_ST4_DX_joined_new_counter D
+on R.patient_ID = D.patient_id;
+
+
+select * from DN_Amgen_Final_BandR;--8,772,605
+
+-----COMMAND 
+---14
+--add in billing pr npi and rendering_pr_npi info
+
+drop table if exists DN_Amgen_Final_BandR_new;
+create table DN_Amgen_Final_BandR_new as
+select amg.*,
+cms1.Provider_Last_Name_Legal_Name as Last_Name,
+cms1.Provider_First_Name as First_Name,
+cms1.Healthcare_Provider_Taxonomy_Code_1 as Primary_Specialty,
+cms2.Provider_Last_Name_Legal_Name as Rendering_Fname,
+cms2.Provider_First_Name as Rendering_Lname,
+cms2.Healthcare_Provider_Taxonomy_Code_1 as Rendering_Specialty
+from DN_Amgen_Final_BandR amg
+left join srn_cmsnpi_latest cms1
+on amg.billing_pr_npi = cms1.NPI
+left join srn_CMSNPI_LATEST cms2
+on amg.rendering_pr_npi = cms2.NPI;
+
+---COMMAND 
+---15
+
+--Some data type formatting here
+
+drop table if exists DN_Amgen_Final_BandR_new_reformat;
+create table if not exists DN_amgen_final_bandR_new_reformat as
+select 
+    PATIENT_ID
+,    TH_NDC
+,    TH_PROCEDURE
+,    PAYER_CLAIM_CONTROL_NUMBER
+,    service_from_date
+,    YEAR_DATE
+,    case when length(SERVICE_FROM_DATE) = 8 then substr(service_from_date, 5,2)
+        else substr(service_from_date,6,2) end as month_date
+,    PAYER_ID
+,    PAYER_NM
+,    TYPE_OF_COVERAGE
+,    TYPE_OF_BILL
+,    cast(paid_units_of_service as VARCHAR(16777216)) as paid_units_of_service
+,    BILLING_PR_NPI
+,    RENDERING_PR_NPI
+,    ADJUDICATED_PROCEDURE_CD
+,    cast(DEDUCTIBLE_AMOUNT as float) as DEDUCTIBLE_AMOUNT
+,cast(COUNT_DEDUCTIBLE_ADJUSTMENT as float) as COUNT_DEDUCTIBLE_ADJUSTMENT
+,cast(COINSURANCE_AMOUNT as float) as COINSURANCE_AMOUNT
+,cast(COUNT_COINSURANCE_ADJUSTMENT as float) as COUNT_COINSURANCE_ADJUSTMENT
+,cast(COPAYMENT_AMOUNT as float) as COPAYMENT_AMOUNT
+,cast(COUNT_COPAYMENT_ADJUSTMENT as float) as COUNT_COPAYMENT_ADJUSTMENT
+,cast(PATIENT_OOP as float) as PATIENT_OOP
+,cast(COUNT_OOP_ADJUSTMENT as float) as COUNT_OOP_ADJUSTMENT
+,    MAX_REVERSAL_DATE
+
+,    MAX_NOT_REVERSAL_OR_DENIAL_DATE
+,    MAX_NON_REVERSAL_DATE
+
+,    TIME_TO_REIMBURSEMENT
+,    TIME_SINCE_REIMBURSEMENT
+,    TIME_TO_SUBMISSION
+,    cast(MAX_SVC_PAT_RESPONSIBILITY_PRIMARY as float) as MAX_SVC_PAT_RESPONSIBILITY_PRIMARY
+,    cast(MAX_SVC_PAT_RESPONSIBILITY_NON_PRIMARY as float) as MAX_SVC_PAT_RESPONSIBILITY_NON_PRIMARY
+,    cast (MAX_PAT_RESPONSIBILITY_1_PRIMARY as float) as MAX_PAT_RESPONSIBILITY_1_PRIMARY
+,    cast(MAX_PAT_RESPONSIBILITY_1_NON_PRIMARY as float) as MAX_PAT_RESPONSIBILITY_1_NON_PRIMARY
+,    cast(MAX_PAT_RESPONSIBILITY_2_PRIMARY as float) as MAX_PAT_RESPONSIBILITY_2_PRIMARY
+,    cast(MAX_PAT_RESPONSIBILITY_2_NON_PRIMARY as float) as MAX_PAT_RESPONSIBILITY_2_NON_PRIMARY
+,    cast(MAX_LINE_CHARGE_AMOUNT_PRIMARY as float) as MAX_LINE_CHARGE_AMOUNT_PRIMARY
+,    cast(MAX_LINE_CHARGE_AMOUNT_NON_PRIMARY as float) as MAX_LINE_CHARGE_AMOUNT_NON_PRIMARY
+,    cast(MAX_LINE_PAID_AMOUNT_PRIMARY as float) as MAX_LINE_PAID_AMOUNT_PRIMARY
+,    cast(MAX_LINE_PAID_AMOUNT_NON_PRIMARY as float) as MAX_LINE_PAID_AMOUNT_NON_PRIMARY
+,    cast(MAX_LINE_ALLOWED_AMOUNT_PRIMARY as float) as MAX_LINE_ALLOWED_AMOUNT_PRIMARY
+,    cast(MAX_LINE_ALLOWED_AMOUNT_NON_PRIMARY as float) as MAX_LINE_ALLOWED_AMOUNT_NON_PRIMARy
+,    cast(MAX_TOTAL_CLAIM_PAYMENT as float) as MAX_TOTAL_CLAIM_PAYMENT
+,    ORG_BUSINESS_NAME
+,    BILLING_LNAME
+,    BILLING_FNAME
+,    BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME
+,    BUSINESS_PRACTICE_LOCATION_ADDRESS_STATE_NAME
+,    BUSINESS_PRACTICE_LOCATION_ADDRESS_POSTAL_CODE
+,    PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME
+,    PROVIDER_BUSINESS_MAILING_ADDRESS_STATE_NAME
+,    RENDERING_CITY
+,    RENDERING_STATE
+,    NUMBER_OF_CLAIMS
+,    PANCREATIC_CANCER
+,    BREAST_CANCER
+,    LUNG_CANCER
+,    MULTIPLE_MYELOMA
+,    BLADDER_CANCER
+,    COLON_CANCER
+,    RECTAL_CANCER
+,    ENDOMETRIAL_CANCER
+,    KIDNEY_CANCER
+,    LEUKEMIA
+,    MELANOMA
+,    NONHODGKIN_LYMPHOMA
+,    PROSTATE_CANCER
+,    THYROID_CANCER
+,    COUNTER
+,    LAST_NAME
+,    FIRST_NAME
+,    PRIMARY_SPECIALTY
+,    RENDERING_FNAME
+,    RENDERING_LNAME
+,    RENDERING_SPECIALTY
+from DN_amgen_final_bandR_new;
+
+
+----COMMAND
+---16
+
+--trimming certain fields to prepare for Tableau
+
+drop table if exists DN_Amgen_final_bandr_new_reformat_update;
+create table DN_Amgen_final_bandr_new_reformat_update as
+select 
+PATIENT_ID,
+TH_NDC,
+TH_PROCEDURE,
+PAYER_CLAIM_CONTROL_NUMBER,
+substr(SERVICE_FROM_DATE,1,7) as Service_from_date,
+YEAR_DATE,
+MONTH_DATE,
+PAYER_ID,
+PAYER_NM,
+TYPE_OF_COVERAGE,
+TYPE_OF_BILL,
+PAID_UNITS_OF_SERVICE,
+BILLING_PR_NPI,
+RENDERING_PR_NPI,
+ADJUDICATED_PROCEDURE_CD,
+DEDUCTIBLE_AMOUNT,
+COUNT_DEDUCTIBLE_ADJUSTMENT,
+COINSURANCE_AMOUNT,
+COUNT_COINSURANCE_ADJUSTMENT,
+COPAYMENT_AMOUNT,
+COUNT_COPAYMENT_ADJUSTMENT,
+PATIENT_OOP,
+COUNT_OOP_ADJUSTMENT,
+substr(MAX_REVERSAL_DATE,1,7) as Max_reversal_date,
+substr(MAX_NOT_REVERSAL_OR_DENIAL_DATE,1,7) as MAX_NOT_REVERSAL_OR_DENIAL_DATE,
+substr(MAX_NON_REVERSAL_DATE,1,7) as MAX_NON_REVERSAL_DATE,
+TIME_TO_REIMBURSEMENT,
+TIME_SINCE_REIMBURSEMENT,
+TIME_TO_SUBMISSION,
+MAX_SVC_PAT_RESPONSIBILITY_PRIMARY,
+MAX_SVC_PAT_RESPONSIBILITY_NON_PRIMARY,
+MAX_PAT_RESPONSIBILITY_1_PRIMARY,
+MAX_PAT_RESPONSIBILITY_1_NON_PRIMARY,
+MAX_PAT_RESPONSIBILITY_2_PRIMARY,
+MAX_PAT_RESPONSIBILITY_2_NON_PRIMARY,
+MAX_LINE_CHARGE_AMOUNT_PRIMARY,
+MAX_LINE_CHARGE_AMOUNT_NON_PRIMARY,
+MAX_LINE_PAID_AMOUNT_PRIMARY,
+MAX_LINE_PAID_AMOUNT_NON_PRIMARY,
+MAX_LINE_ALLOWED_AMOUNT_PRIMARY,
+MAX_LINE_ALLOWED_AMOUNT_NON_PRIMARY,
+MAX_TOTAL_CLAIM_PAYMENT,
+ORG_BUSINESS_NAME,
+BILLING_LNAME,
+BILLING_FNAME,
+BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME,
+BUSINESS_PRACTICE_LOCATION_ADDRESS_STATE_NAME,
+BUSINESS_PRACTICE_LOCATION_ADDRESS_POSTAL_CODE,
+PROVIDER_BUSINESS_PRACTICE_LOCATION_ADDRESS_CITY_NAME,
+PROVIDER_BUSINESS_MAILING_ADDRESS_STATE_NAME,
+RENDERING_CITY,
+RENDERING_STATE,
+NUMBER_OF_CLAIMS,
+PANCREATIC_CANCER,
+BREAST_CANCER,
+LUNG_CANCER,
+MULTIPLE_MYELOMA,
+BLADDER_CANCER,
+COLON_CANCER,
+RECTAL_CANCER,
+ENDOMETRIAL_CANCER,
+KIDNEY_CANCER,
+LEUKEMIA,
+MELANOMA,
+NONHODGKIN_LYMPHOMA,
+PROSTATE_CANCER,
+THYROID_CANCER,
+COUNTER,
+LAST_NAME,
+FIRST_NAME,
+PRIMARY_SPECIALTY,
+RENDERING_FNAME,
+RENDERING_LNAME,
+RENDERING_SPECIALTY
+from DN_amgen_final_bandR_new_reformat;
+
+--what fields do we have in the final table
+describe table DN_amgen_final_bandR_new_reformat;
+
+describe table sv_bill_type_pos_xwalk;
+
+select * from Amgen_and_Competitor_Therapies;--this has has the amgen and competitor therapies
+  
+--joining in therapy names(See top of Amgen OOP#2)
+
