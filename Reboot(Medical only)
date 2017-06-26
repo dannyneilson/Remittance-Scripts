@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST1 AS
 --Now with all of the Claim Numbers pull in patientsuffix + zip when the patient does not have a relationship, else take their DOB 
 instead of zip
 --the patient_id is coming from the claim_record when we have a match on claim number between the remitted claims table and claim_record
-DROP TABLE IF EXISTS DN_Amgen_RC_ST2;
-CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST2 AS
+DROP TABLE IF EXISTS DN_Amgen_Medicalonly;
+CREATE TABLE IF NOT EXISTS DN_Amgen_Medicalonly AS
   SELECT CN.Claim_payment_number
          , CN.Claim_number
          , CASE
