@@ -1,0 +1,165 @@
+--STEP1
+--Get claim payment numbers from service payment record based on adjudicated procedure code. We get claim payment numbers when
+adjudicated procedure code is in the service payment record
+--here the Amgen_and_Competitor_Therapies tables is a table I made with drug names and HCPCS and NDC codes
+DROP TABLE IF EXISTS DN_Amgen_R_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST1 AS
+  SELECT claim_payment_number
+  FROM   RWD.service_payment_record sv
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON sv.adjudicated_procedure_cd = th.HCPCS;
+  
+  --select count(*) from DN_Amgen_R_ST1;
+  --11,059,902 records pertaining to Amgen and competitor therapies
+
+-- COMMAND ----------
+
+--STEP 2
+--Get claim_numbers from era_linked_record now that we have claim_payment_numbers from service payment record
+--the era linked record table allows us to get claim numbers when we have claim payment numbers, which we will need later to determine 
+patient information
+--left join because we want to keep all claim PAYMENT records even if we can't find a claim for them
+DROP TABLE IF EXISTS DN_Amgen_R_ST2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_R_ST2 AS
+  SELECT CPN.claim_payment_number, linked_claim_id_1 AS Claim_number
+  FROM   DN_Amgen_R_ST1 CPN
+         LEFT JOIN RWD.era_linked_record lin
+                ON CPN.claim_payment_number = lin.claim_payment_number;
+
+--since this is a left join and we expect to see only one claim_number for a given claim_payment_number, 
+
+STEP 2B
+--we do this because we want to only match on the first nine digits of ndc code since the last two relate to package information
+
+DROP TABLE IF EXISTS service_record_new;
+CREATE TABLE IF NOT EXISTS service_record_new as
+select claim_number, procedure_x, ndc, substr(ndc,1,9) as ndc_new
+from RWD.service_record;
+
+-- COMMAND ----------
+
+--STEP 3
+--grab CN based on HCPCS and NDC in service record and union to remove duplication
+DROP TABLE IF EXISTS DN_Amgen_C_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1 AS
+  SELECT claim_number
+  FROM   RWD.service_record sv
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON sv.procedure_x = th.HCPCS
+  UNION ALL
+  SELECT claim_number
+  FROM service_record_new sv
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  on sv.ndc_new = th.NDC;
+  
+  --select * from DN_Amgen_C_ST1;
+  --16,755,210 rows are the result of this
+  
+-- COMMAND ----------
+
+--STEP 4
+--connect Claim Numbers to Claim Payment Numbers -> need to get all instances where we can match 
+a claim number to claim payment number using era linked record
+--we do an inner join because we only care to keep Claim numbers where we find Claim payment numbers
+--we union because we want to remove duplicates
+DROP TABLE IF EXISTS DN_Amgen_C_ST2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST2 AS
+  SELECT DISTINCT Claim_payment_number,claim_number
+  FROM   (SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_1 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_2 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_3 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_4 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_5 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_6 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_7 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_8 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_9 = CN.claim_number
+          UNION ALL
+          SELECT lin.Claim_payment_number,Claim_number
+          FROM   DN_Amgen_C_ST1 CN
+                 INNER JOIN rwd.era_linked_record lin
+                         ON lin.linked_claim_id_10 = CN.claim_number); 
+
+
+-- COMMAND ----------
+
+--STEP 5
+--union step 2 + 4 w/ Claim Payment Numbers and Claim Numbers
+--we are combining result of both submit to remit and remit to submit
+DROP TABLE IF EXISTS DN_Amgen_RC_ST1;
+CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST1 AS
+  SELECT Claim_payment_number,Claim_number
+  FROM   DN_Amgen_R_ST2
+  UNION
+  SELECT Claim_payment_number,Claim_number
+  FROM   DN_Amgen_C_ST2;
+
+-- COMMAND ----------
+
+--STEP 6** IMPORTANT TABLE ***
+--Now with all of the Claim Numbers pull in patientsuffix + zip when the patient does not have a relationship, else take their DOB 
+instead of zip
+--the patient_id is coming from the claim_record when we have a match on claim number between the remitted claims table and claim_record
+DROP TABLE IF EXISTS DN_Amgen_RC_ST2;
+CREATE TABLE IF NOT EXISTS DN_Amgen_RC_ST2 AS
+  SELECT CN.Claim_payment_number
+         , CN.Claim_number
+         , CASE
+             WHEN patient_relation <> '19' THEN
+             Concat(patient_suffix, member_adr_zip)
+             ELSE Concat(patient_suffix, patient_dob)
+           END AS Patient_ID
+  FROM   DN_Amgen_RC_ST1 CN
+         LEFT JOIN RWD.claim_record clp
+                ON CN.claim_number = clp.claim_number; 
+
+--select * from DN_Amgen_RC_ST2;
+--we get 6,925,662 records which is what we expect
+
+--needed to repeat to get the therapy associated w/ the claim_number in case we have claims that only exist because of ndc code
+--grab CN based on HCPCS and NDC in claim svc record
+CREATE TABLE IF NOT EXISTS DN_Amgen_C_ST1_therapy AS
+  SELECT claim_number,SV.ndc, procedure_x
+  FROM   RWD.service_record SV
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  ON SV.procedure_x = th.HCPCS;
+  UNION ALL
+  SELECT claim_number,svn.ndc,svn.procedure_x
+  FROM   service_record_new svn
+  INNER JOIN Amgen_and_Competitor_Therapies th
+  on svn.ndc_new = th.NDC;
