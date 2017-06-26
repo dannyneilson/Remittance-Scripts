@@ -12,6 +12,7 @@ Steps to follow for different outputs
 3)Billing and Remittance(must run Remit first)
 
 
+
 ---OOP Landscape
 
 1)Reboot 
@@ -19,6 +20,7 @@ Steps to follow for different outputs
 2)Remit Pull from Reboot
 
 3)OOP Landscape(must run Remit first)
+
 
 
 ---OOP Distribution
@@ -30,6 +32,7 @@ Steps to follow for different outputs
 3)OOP Landscape
 
 4)OOP Distribution
+
 
 
 ---Denials
