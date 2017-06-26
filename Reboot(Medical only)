@@ -1,4 +1,4 @@
---STEP1
+--STEP 1
 --Get claim payment numbers from service payment record based on adjudicated procedure code. We get claim payment numbers when
 adjudicated procedure code is in the service payment record
 --here the Amgen_and_Competitor_Therapies tables is a table I made with drug names and HCPCS and NDC codes
