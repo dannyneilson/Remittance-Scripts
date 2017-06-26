@@ -57,8 +57,7 @@ CREATE TABLE IF NOT EXISTS DN_Amgen_EMed_Remit AS
 			   type_of_bill,
                sv.paid_units_of_service
 	FROM       ( SELECT DISTINCT claim_payment_number,patient_ID 
-				 FROM            DN_Amgen_Medicalonly 
-				 WHERE           TYPE = 'EMD_Med') ORI 
+				 FROM            DN_Amgen_Medicalonly) ORI 
 				INNER JOIN RWD.claim_payment_record cl 
 				ON         ORI.claim_payment_number = cl.claim_payment_number 
 				INNER JOIN RWD.service_payment_record sv 
