@@ -3,7 +3,7 @@ Use for Remittance Analysis, including Out of Pocket calculations, Billing and R
 
 Steps to follow for different outputs
 
----Billing and Remittance
+---Billing and Remittance---
 
 1)Reboot 
 
@@ -13,7 +13,7 @@ Steps to follow for different outputs
 
 
 
----OOP Landscape
+---OOP Landscape---
 
 1)Reboot 
 
@@ -23,7 +23,7 @@ Steps to follow for different outputs
 
 
 
----OOP Distribution
+---OOP Distribution---
 
 1)Reboot 
 
@@ -35,7 +35,7 @@ Steps to follow for different outputs
 
 
 
----Denials
+---Denials---
 
 1)Reboot 
 
